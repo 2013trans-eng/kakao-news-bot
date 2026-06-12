@@ -1,3 +1,4 @@
+import base64
 import json
 import os
 import re
@@ -21,7 +22,7 @@ RSS_DAEGU = (
 )
 RSS_NATIONAL = (
     "https://news.google.com/rss/search"
-    "?q=%EC%8A%A4%ED%83%80%ED%8A%B8%EC%97%85+%EC%B0%BD%EC%97%85+%ED%88%AC%EC%9E%90+%EC%A0%95%EC%B1%85"
+    "?q=AI+%EC%8A%A4%ED%83%80%ED%8A%B8%EC%97%85+%EA%B8%B0%EC%88%A0+%EC%B0%BD%EC%97%85"
     "&hl=ko&gl=KR&ceid=KR:ko"
 )
 
@@ -43,7 +44,7 @@ def words(title: str) -> frozenset:
 
 
 def is_duplicate(title: str, accepted: list[str]) -> bool:
-    """기존 기사들과 단어 겹침 65% 이상이면 같은 기사로 판단"""
+    """기존 기사들과 단어 겹침 50% 이상이면 같은 기사로 판단"""
     w = words(title)
     if not w:
         return False
@@ -52,7 +53,7 @@ def is_duplicate(title: str, accepted: list[str]) -> bool:
         if not ow:
             continue
         overlap = len(w & ow) / min(len(w), len(ow))
-        if overlap >= 0.65:
+        if overlap >= 0.50:
             return True
     return False
 
@@ -122,16 +123,52 @@ def fetch_section(label: str, rss_url: str, n: int, global_accepted: list[str]) 
 
 # ── URL 단축 ─────────────────────────────────────────────────────────────────
 
+def _decode_google_news_url(google_url: str) -> str:
+    """Google News RSS path의 base64 protobuf에서 실제 기사 URL 추출"""
+    try:
+        if "/rss/articles/" not in google_url:
+            return ""
+        article_id = google_url.split("/rss/articles/")[1].split("?")[0]
+        article_id = article_id.replace("-", "+").replace("_", "/")
+        article_id += "=" * ((-len(article_id)) % 4)
+        decoded = base64.b64decode(article_id)
+        for prefix in (b"https://", b"http://"):
+            idx = decoded.find(prefix)
+            if idx < 0:
+                continue
+            end = idx
+            while end < len(decoded) and 0x20 <= decoded[end] < 0x7F:
+                end += 1
+            candidate = decoded[idx:end].decode("utf-8", errors="ignore").strip()
+            if candidate.startswith("http") and "." in candidate:
+                return candidate
+    except Exception:
+        pass
+    return ""
+
+
 def resolve_url(url: str) -> str:
-    """Google News 리다이렉트를 따라가 실제 기사 URL 반환"""
+    """Google News 리다이렉트에서 실제 기사 URL 추출"""
     if not url:
         return url
+    # 1) base64 디코딩 — HTTP 요청 없이 즉시 실제 URL 추출
+    decoded = _decode_google_news_url(url)
+    if decoded:
+        return decoded
+    # 2) HTTP 리다이렉트 추적 (fallback)
     try:
-        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+        req = urllib.request.Request(url, headers={
+            "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) "
+                          "AppleWebKit/605.1.15 Safari/604.1",
+            "Accept-Language": "ko-KR,ko;q=0.9",
+        })
         with urllib.request.urlopen(req, timeout=10) as resp:
-            return resp.url   # urllib이 리다이렉트를 자동 추적
+            final = resp.url
+            if "news.google.com" not in final:
+                return final
     except Exception:
-        return url
+        pass
+    return url
 
 
 def shorten(url: str) -> str:
@@ -219,13 +256,13 @@ def main():
         with open(os.environ.get("GITHUB_ENV", "/dev/null"), "a") as f:
             f.write(f"NEW_REFRESH_TOKEN={new_rt}\n")
 
-    # 2. 뉴스 수집 — 5 + 5 고정 구조
+    # 2. 뉴스 수집 — 3 + 3 구조
     global_accepted: list[str] = []
 
     daegu = fetch_section("대구·경북 창업", RSS_DAEGU, 3, global_accepted)
     global_accepted.extend(it["title"] for it in daegu)
 
-    national = fetch_section("전국 창업·스타트업", RSS_NATIONAL, 3, global_accepted)
+    national = fetch_section("IT·스타트업", RSS_NATIONAL, 3, global_accepted)
     global_accepted.extend(it["title"] for it in national)
 
     # 3. URL 단축
@@ -242,7 +279,7 @@ def main():
         if daegu:
             sections.append(format_section("대구·경북 창업", daegu))
         if national:
-            sections.append(format_section("전국 창업·스타트업", national))
+            sections.append(format_section("IT·스타트업", national))
         body = "\n\n".join(sections)
 
     print(f"\n{'='*50}\n전송 메시지 ({len(body)}자):\n{body}\n{'='*50}")
