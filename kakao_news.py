@@ -14,16 +14,33 @@ REFRESH_TOKEN = os.environ["KAKAO_REFRESH_TOKEN"]
 TOKEN_URL = "https://kauth.kakao.com/oauth/token"
 SEND_URL  = "https://kapi.kakao.com/v2/api/talk/memo/default/send"
 
-RSS_LOCAL = (
-    "https://news.google.com/rss/search"
-    "?q=%EB%8C%80%EA%B5%AC%EA%B2%BD%EB%B6%81+%EC%8A%A4%ED%83%80%ED%8A%B8%EC%97%85"
-    "&hl=ko&gl=KR&ceid=KR:ko"
-)
-RSS_NATIONAL = (
-    "https://news.google.com/rss/search"
-    "?q=%EC%8A%A4%ED%83%80%ED%8A%B8%EC%97%85+%EC%B0%BD%EC%97%85+%ED%88%AC%EC%9E%90"
-    "&hl=ko&gl=KR&ceid=KR:ko"
-)
+# 우선순위 순서대로 정의
+RSS_SOURCES = [
+    {
+        "label": "대구·경북 창업",
+        "url": (
+            "https://news.google.com/rss/search"
+            "?q=%EB%8C%80%EA%B5%AC%EA%B2%BD%EB%B6%81+%EC%8A%A4%ED%83%80%ED%8A%B8%EC%97%85"
+            "&hl=ko&gl=KR&ceid=KR:ko"
+        ),
+    },
+    {
+        "label": "전국 창업·스타트업",
+        "url": (
+            "https://news.google.com/rss/search"
+            "?q=%EC%8A%A4%ED%83%80%ED%8A%B8%EC%97%85+%EC%B0%BD%EC%97%85+%ED%88%AC%EC%9E%90"
+            "&hl=ko&gl=KR&ceid=KR:ko"
+        ),
+    },
+    {
+        "label": "기술·IT",
+        "url": (
+            "https://news.google.com/rss/search"
+            "?q=AI+%EA%B8%B0%EC%88%A0+IT+%EC%8A%A4%ED%83%80%ED%8A%B8%EC%97%85"
+            "&hl=ko&gl=KR&ceid=KR:ko"
+        ),
+    },
+]
 
 
 # ── 유틸 ─────────────────────────────────────────────────────────────────────
@@ -57,15 +74,31 @@ def shorten(url: str) -> str:
 
 
 def normalize(title: str) -> str:
-    t = re.sub(r"\s*[-|]\s*\S+$", "", title)
-    t = re.sub(r"[\s\[\]()【】「」《》<>]", "", t)
+    """출처 제거 + 특수문자·공백 제거 → 중복 판별 키"""
+    # ' - 언론사명', ' | 언론사' 등 제거
+    t = re.sub(r"\s*[-|]\s*[^\s].{0,10}$", "", title)
+    # 숫자 외 특수문자·공백 제거
+    t = re.sub(r"[\s\[\]()【】「」《》<>''\"·…]", "", t)
     return t.lower()
+
+
+def is_duplicate(key: str, seen: set) -> bool:
+    """
+    완전 일치 또는 앞 12자 일치(같은 사건 다른 표현)로 중복 판별.
+    짧은 키는 앞 12자 검사를 생략해 오탐 방지.
+    """
+    if key in seen:
+        return True
+    if len(key) >= 12:
+        prefix = key[:12]
+        if any(s[:12] == prefix for s in seen if len(s) >= 12):
+            return True
+    return False
 
 
 # ── RSS 파싱 ──────────────────────────────────────────────────────────────────
 
 def fetch_rss(url: str) -> list[dict]:
-    """제목 + 링크 dict 목록 반환"""
     req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
     with urllib.request.urlopen(req, timeout=15) as resp:
         raw = resp.read()
@@ -73,88 +106,81 @@ def fetch_rss(url: str) -> list[dict]:
     results = []
     for item in root.findall(".//item"):
         title = (item.findtext("title") or "").strip()
-        # ElementTree에서 <link> 는 text가 아닌 tail로 오는 경우 있음
         link_el = item.find("link")
         if link_el is not None:
             link = (link_el.text or link_el.tail or "").strip()
         else:
-            link = ""
-        # guid 도 fallback
-        if not link:
             link = (item.findtext("guid") or "").strip()
-        results.append({"title": title, "link": link})
+        if title:
+            results.append({"title": title, "link": link})
     return results
 
 
-# ── 뉴스 수집 + 단축 ─────────────────────────────────────────────────────────
+# ── 뉴스 수집 ────────────────────────────────────────────────────────────────
 
-def collect_news(total: int = 10) -> tuple[list[dict], list[dict]]:
-    seen = set()
+def collect_news(total: int = 10) -> list[dict]:
+    """
+    RSS_SOURCES 순서대로 수집해 total건을 채운다.
+    각 소스별로 label을 붙여 섹션 구분에 활용.
+    """
+    seen: set[str] = set()
+    collected: list[dict] = []
 
-    def pick(items: list[dict], limit: int) -> list[dict]:
-        out = []
+    for source in RSS_SOURCES:
+        remain = total - len(collected)
+        if remain <= 0:
+            break
+
+        print(f"\n[RSS] {source['label']} — {remain}건 필요")
+        try:
+            items = fetch_rss(source["url"])
+            print(f"  수신 {len(items)}건")
+        except Exception as e:
+            print(f"  오류: {e}")
+            continue
+
+        picked = 0
         for it in items:
             key = normalize(it["title"])
-            if key and key not in seen:
-                seen.add(key)
-                out.append(it)
-            if len(out) == limit:
+            if not key or is_duplicate(key, seen):
+                continue
+            seen.add(key)
+            it["label"] = source["label"]
+            collected.append(it)
+            picked += 1
+            if picked == remain:
                 break
-        return out
 
-    print("[2] 대구·경북 스타트업 뉴스 수집 중...")
-    try:
-        local_raw = fetch_rss(RSS_LOCAL)
-        print(f"  [+] {len(local_raw)}건 수신")
-    except Exception as e:
-        print(f"  [!] 오류: {e}")
-        local_raw = []
-    local = pick(local_raw, total)
-    print(f"  [+] {len(local)}건 선택")
+        print(f"  중복 제거 후 {picked}건 선택 (누적 {len(collected)}건)")
 
-    national = []
-    remain = total - len(local)
-    if remain > 0:
-        print(f"[3] 전국 창업 뉴스로 {remain}건 보충 중...")
-        try:
-            nat_raw = fetch_rss(RSS_NATIONAL)
-            print(f"  [+] {len(nat_raw)}건 수신")
-            national = pick(nat_raw, remain)
-            print(f"  [+] {len(national)}건 선택")
-        except Exception as e:
-            print(f"  [!] 오류: {e}")
+    # URL 단축
+    print(f"\n[TinyURL] {len(collected)}건 단축 중...")
+    for it in collected:
+        it["short"] = shorten(it["link"])
+        print(f"  {it['short']}  ← {it['title'][:35]}...")
 
-    # URL 단축 (TinyURL)
-    print("[4] URL 단축 중...")
-    for group in (local, national):
-        for it in group:
-            original = it["link"]
-            it["short"] = shorten(original)
-            print(f"  {it['short']}  ← {it['title'][:30]}...")
-
-    return local, national
+    return collected
 
 
 # ── 카카오 ────────────────────────────────────────────────────────────────────
 
 def refresh_access_token() -> tuple[str, str | None]:
-    print("[1] 토큰 갱신 요청 중...")
+    print("[토큰] 갱신 요청 중...")
     result = post_form(TOKEN_URL, {
         "grant_type":    "refresh_token",
         "client_id":     REST_API_KEY,
         "refresh_token": REFRESH_TOKEN,
     })
     if "access_token" not in result:
-        print(f"  [!] 토큰 오류: {result}")
+        print(f"  오류: {result}")
         sys.exit(1)
     new_rt = result.get("refresh_token")
-    print(f"  [+] access_token 발급 (앞 10자: {result['access_token'][:10]}...)")
+    print(f"  발급 완료 (앞 10자: {result['access_token'][:10]}...)")
     return result["access_token"], new_rt
 
 
 def send_message(access_token: str, text: str) -> dict:
-    print("[5] 카카오톡 전송 요청 중...")
-    print(f"  메시지 길이: {len(text)}자 / 2000자 한도")
+    print(f"\n[카카오] 전송 — {len(text)}자 / 2000자 한도")
     template = {
         "object_type": "text",
         "text":        text[:2000],
@@ -178,41 +204,54 @@ def send_message(access_token: str, text: str) -> dict:
 
 # ── 메시지 조립 ───────────────────────────────────────────────────────────────
 
-def format_items(items: list[dict]) -> str:
-    lines = []
-    for it in items:
-        line = f"• {it['title']}"
+def build_message(news: list[dict]) -> str:
+    today = datetime.now().strftime("%Y.%m.%d")
+    lines = [f"🚀 오늘의 창업 뉴스 ({today})"]
+
+    # 소스 레이블별로 묶어서 섹션 구성
+    current_label = None
+    section_items: list[str] = []
+
+    def flush(label, items):
+        if items:
+            return [f"\n[ {label} ]"] + items
+        return []
+
+    for it in news:
+        label = it.get("label", "기타")
+        item_text = f"• {it['title']}"
         if it.get("short"):
-            line += f"\n  {it['short']}"
-        lines.append(line)
+            item_text += f"\n  {it['short']}"
+
+        if label != current_label:
+            lines.extend(flush(current_label, section_items))
+            current_label = label
+            section_items = [item_text]
+        else:
+            section_items.append(item_text)
+
+    lines.extend(flush(current_label, section_items))
     return "\n\n".join(lines)
 
 
 def main():
     print(f"{'='*50}")
     print(f"실행 시각: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} UTC")
-    print(f"{'='*50}")
+    print(f"{'='*50}\n")
 
     access_token, new_rt = refresh_access_token()
     if new_rt:
         with open(os.environ.get("GITHUB_ENV", "/dev/null"), "a") as f:
             f.write(f"NEW_REFRESH_TOKEN={new_rt}\n")
 
-    local, national = collect_news(total=10)
+    news = collect_news(total=10)
 
-    if not local and not national:
-        print("[!] 뉴스 없음 — 대체 메시지 전송")
-        body = "• (뉴스를 불러오지 못했습니다.)"
+    if not news:
+        body = "뉴스를 불러오지 못했습니다. 연결을 확인하세요."
     else:
-        today = datetime.now().strftime("%Y.%m.%d")
-        sections = [f"🚀 오늘의 창업 뉴스 ({today})"]
-        if local:
-            sections.append(f"[ 대구·경북 창업 ]\n{format_items(local)}")
-        if national:
-            sections.append(f"[ 전국 창업·스타트업 ]\n{format_items(national)}")
-        body = "\n\n".join(sections)
+        body = build_message(news)
 
-    print(f"\n전송 메시지 ({len(body)}자):\n{body}\n")
+    print(f"\n{'='*50}\n전송 메시지 ({len(body)}자):\n{body}\n{'='*50}")
 
     result = send_message(access_token, body)
     if result.get("result_code") == 0:
