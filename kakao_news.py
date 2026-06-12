@@ -64,8 +64,11 @@ def fetch_naver_news(query: str) -> list[dict]:
     req = urllib.request.Request(f"{NAVER_SEARCH_URL}?{params}")
     req.add_header("X-Naver-Client-Id",     NAVER_CLIENT_ID)
     req.add_header("X-Naver-Client-Secret", NAVER_CLIENT_SECRET)
-    with urllib.request.urlopen(req, timeout=15) as resp:
-        data = json.loads(resp.read().decode())
+    try:
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            data = json.loads(resp.read().decode())
+    except urllib.error.HTTPError as e:
+        raise Exception(f"Naver API HTTP {e.code}: {e.read().decode()}")
     results = []
     for item in data.get("items", []):
         title = html.unescape(re.sub(r"<[^>]+>", "", item.get("title", ""))).strip()
