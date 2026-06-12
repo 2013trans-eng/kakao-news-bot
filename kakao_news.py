@@ -3,6 +3,7 @@ import os
 import sys
 import urllib.request
 import urllib.parse
+import urllib.error
 import xml.etree.ElementTree as ET
 from datetime import datetime
 
@@ -22,30 +23,55 @@ def post_form(url: str, data: dict) -> dict:
     body = urllib.parse.urlencode(data).encode()
     req  = urllib.request.Request(url, data=body, method="POST")
     req.add_header("Content-Type", "application/x-www-form-urlencoded")
-    with urllib.request.urlopen(req, timeout=15) as resp:
-        return json.loads(resp.read().decode())
+    try:
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            raw = resp.read().decode()
+            print(f"  [HTTP {resp.status}] {url}")
+            return json.loads(raw)
+    except urllib.error.HTTPError as e:
+        body_err = e.read().decode()
+        print(f"  [HTTPError {e.code}] {url} → {body_err}")
+        raise
 
 
 def refresh_access_token() -> tuple[str, str | None]:
-    """access_token, (rotated refresh_token or None) 반환"""
+    print("[1] 토큰 갱신 요청 중...")
     result = post_form(TOKEN_URL, {
         "grant_type":    "refresh_token",
         "client_id":     REST_API_KEY,
         "refresh_token": REFRESH_TOKEN,
     })
-    new_rt = result.get("refresh_token")  # Kakao는 갱신 시점에만 새 refresh_token 발급
+    if "access_token" not in result:
+        print(f"  [!] 토큰 응답 오류: {result}")
+        sys.exit(1)
+    new_rt = result.get("refresh_token")
+    print(f"  [+] access_token 발급 완료 (앞 10자: {result['access_token'][:10]}...)")
+    if new_rt:
+        print("  [+] 새 refresh_token 발급됨")
     return result["access_token"], new_rt
 
 
 def fetch_news(n: int = 3) -> list[str]:
-    req = urllib.request.Request(RSS_URL, headers={"User-Agent": "Mozilla/5.0"})
-    with urllib.request.urlopen(req, timeout=15) as resp:
-        root = ET.fromstring(resp.read())
-    items = root.findall(".//item")[:n]
-    return [f"• {(item.findtext('title') or '').strip()}" for item in items]
+    print("[2] Google News RSS 요청 중...")
+    try:
+        req = urllib.request.Request(RSS_URL, headers={"User-Agent": "Mozilla/5.0"})
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            raw = resp.read()
+        print(f"  [+] RSS 응답 {len(raw)} bytes")
+        root = ET.fromstring(raw)
+        items = root.findall(".//item")
+        print(f"  [+] 뉴스 항목 {len(items)}건 발견")
+        results = [f"• {(item.findtext('title') or '').strip()}" for item in items[:n]]
+        for r in results:
+            print(f"  {r}")
+        return results
+    except Exception as e:
+        print(f"  [!] RSS 오류: {e}")
+        return []
 
 
 def send_message(access_token: str, text: str) -> dict:
+    print("[3] 카카오톡 전송 요청 중...")
     template = {
         "object_type": "text",
         "text":        text[:2000],
@@ -58,39 +84,45 @@ def send_message(access_token: str, text: str) -> dict:
     req = urllib.request.Request(SEND_URL, data=payload, method="POST")
     req.add_header("Authorization",  f"Bearer {access_token}")
     req.add_header("Content-Type",   "application/x-www-form-urlencoded")
-    with urllib.request.urlopen(req) as resp:
-        return json.loads(resp.read().decode())
+    try:
+        with urllib.request.urlopen(req) as resp:
+            raw = resp.read().decode()
+            print(f"  [HTTP {resp.status}] 응답: {raw}")
+            return json.loads(raw)
+    except urllib.error.HTTPError as e:
+        body_err = e.read().decode()
+        print(f"  [HTTPError {e.code}] {body_err}")
+        raise
 
 
 def main():
-    print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] 시작")
+    print(f"{'='*50}")
+    print(f"실행 시각: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} UTC")
+    print(f"{'='*50}")
 
     # 1. 토큰 갱신
     access_token, new_refresh_token = refresh_access_token()
-    print("[+] access_token 갱신 완료")
 
-    # 새 refresh_token이 발급된 경우 환경변수 파일에 기록 → 워크플로에서 Secret 업데이트
     if new_refresh_token:
-        print(f"::notice::NEW_REFRESH_TOKEN={new_refresh_token}")
         with open(os.environ.get("GITHUB_ENV", "/dev/null"), "a") as f:
             f.write(f"NEW_REFRESH_TOKEN={new_refresh_token}\n")
 
     # 2. 뉴스 수집
     news = fetch_news()
     if not news:
-        print("[!] 뉴스 항목 없음 — 전송 건너뜀")
-        return
+        print("[!] 뉴스 항목 없음 — 테스트 메시지로 대체 전송")
+        news = ["• (뉴스를 불러오지 못했습니다. 연결을 확인하세요.)"]
 
     today = datetime.now().strftime("%Y.%m.%d")
     message = f"🚀 대경 창업 뉴스 ({today})\n\n" + "\n\n".join(news)
-    print(f"[*] 메시지:\n{message}")
+    print(f"\n전송 메시지:\n{message}\n")
 
     # 3. 카카오톡 전송
     result = send_message(access_token, message)
     if result.get("result_code") == 0:
         print("[+] 카카오톡 전송 성공!")
     else:
-        print(f"[!] 전송 응답: {result}")
+        print(f"[!] 전송 실패 응답: {result}")
         sys.exit(1)
 
 
