@@ -2,7 +2,7 @@ name: 대구경북 경제뉴스 카카오톡 전송
 
 on:
   schedule:
-    - cron: '30 23 * * *'  # 매일 KST 08:30 (= UTC 23:30)
+    - cron: '40 23 * * *'  # 매일 KST 08:40 (= UTC 23:40)
   workflow_dispatch:
 
 jobs:
