@@ -15,6 +15,12 @@ TOKEN_URL = "https://kauth.kakao.com/oauth/token"
 SEND_URL  = "https://kapi.kakao.com/v2/api/talk/memo/default/send"
 
 # 우선순위 순서대로 정의
+# 반복·행사성 기사 필터 키워드
+NOISE_KEYWORDS = [
+    "커넥팅데이", "채용박람회", "보도자료", "IR피칭", "데모데이",
+    "네트워킹데이", "설명회", "간담회", "수료식", "발대식",
+]
+
 RSS_SOURCES = [
     {
         "label": "대구·경북 창업",
@@ -74,26 +80,33 @@ def shorten(url: str) -> str:
 
 
 def normalize(title: str) -> str:
-    """출처 제거 + 특수문자·공백 제거 → 중복 판별 키"""
-    # ' - 언론사명', ' | 언론사' 등 제거
-    t = re.sub(r"\s*[-|]\s*[^\s].{0,10}$", "", title)
-    # 숫자 외 특수문자·공백 제거
-    t = re.sub(r"[\s\[\]()【】「」《》<>''\"·…]", "", t)
+    """출처·조사·공백 제거 → 중복 판별 키"""
+    t = re.sub(r"\s*[-|]\s*[^\s].{0,15}$", "", title)   # ' - 언론사' 제거
+    t = re.sub(r"[\s\[\]()【】「」《》<>''\"·…,]", "", t)   # 공백·특수문자 제거
+    t = re.sub(r"(개|곳|명|억|조|만)\b", "", t)             # 단위 표현 통일
     return t.lower()
 
 
 def is_duplicate(key: str, seen: set) -> bool:
     """
-    완전 일치 또는 앞 12자 일치(같은 사건 다른 표현)로 중복 판별.
-    짧은 키는 앞 12자 검사를 생략해 오탐 방지.
+    1) 완전 일치
+    2) 한쪽이 다른 쪽의 앞부분(startswith) → 같은 기사 다른 길이
+    3) 앞 16자 일치 → 미묘한 표현 차이 제거 (37곳 / 37개 등)
     """
     if key in seen:
         return True
-    if len(key) >= 12:
-        prefix = key[:12]
-        if any(s[:12] == prefix for s in seen if len(s) >= 12):
+    for s in seen:
+        short, long = (key, s) if len(key) <= len(s) else (s, key)
+        if len(short) >= 10 and long.startswith(short):
+            return True
+    if len(key) >= 16:
+        if any(s[:16] == key[:16] for s in seen if len(s) >= 16):
             return True
     return False
+
+
+def is_noise(title: str) -> bool:
+    return any(kw in title for kw in NOISE_KEYWORDS)
 
 
 # ── RSS 파싱 ──────────────────────────────────────────────────────────────────
@@ -141,6 +154,8 @@ def collect_news(total: int = 10) -> list[dict]:
 
         picked = 0
         for it in items:
+            if is_noise(it["title"]):
+                continue
             key = normalize(it["title"])
             if not key or is_duplicate(key, seen):
                 continue
