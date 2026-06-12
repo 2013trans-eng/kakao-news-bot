@@ -18,7 +18,7 @@ SEND_URL         = "https://kapi.kakao.com/v2/api/talk/memo/default/send"
 NAVER_SEARCH_URL = "https://openapi.naver.com/v1/search/news.json"
 
 QUERY_DAEGU    = "대구경북 창업 스타트업"
-QUERY_NATIONAL = "AI 스타트업 기술 창업"
+QUERY_NATIONAL = "스타트업 창업 투자 정책"
 
 NOISE_KEYWORDS = [
     "커넥팅데이", "데모데이", "IR피칭", "채용박람회", "네트워킹데이",
@@ -185,10 +185,10 @@ def main():
     # 2. 뉴스 수집 — 3 + 3 구조
     global_accepted: list[str] = []
 
-    daegu    = fetch_section("대구·경북 창업", QUERY_DAEGU,    3, global_accepted)
+    daegu    = fetch_section("대구·경북 창업", QUERY_DAEGU,    4, global_accepted)
     global_accepted.extend(it["title"] for it in daegu)
 
-    national = fetch_section("IT·스타트업",   QUERY_NATIONAL, 3, global_accepted)
+    national = fetch_section("IT·스타트업",   QUERY_NATIONAL, 4, global_accepted)
     global_accepted.extend(it["title"] for it in national)
 
     # 3. 메시지 조립
