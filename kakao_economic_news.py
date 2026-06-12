@@ -18,7 +18,7 @@ SEND_URL         = "https://kapi.kakao.com/v2/api/talk/memo/default/send"
 NAVER_SEARCH_URL = "https://openapi.naver.com/v1/search/news.json"
 
 QUERY   = "대구경북 경제"
-MAX_NUM = 10
+MAX_NUM = 8
 
 NOISE_KEYWORDS = [
     "커넥팅데이", "데모데이", "IR피칭", "채용박람회", "네트워킹데이",
