@@ -25,6 +25,14 @@ NOISE_KEYWORDS = [
     "보도자료", "설명회", "간담회", "수료식", "발대식", "모집 공고",
 ]
 
+# 엔티티 캡에서 제외할 일반 명사 (인물·기관명 아닌 것)
+ENTITY_STOPWORDS = {
+    "경제", "뉴스", "기업", "투자", "정책", "대구", "경북", "대구경북",
+    "한국", "정부", "지원", "발표", "추진", "확대", "사업", "지역",
+    "성장", "올해", "내년", "시장", "산업", "관련", "진행", "예정",
+    "계획", "효과", "결과", "문제", "상황", "방안", "개선", "강화",
+}
+
 
 # ── 중복 판별 ─────────────────────────────────────────────────────────────────
 
@@ -94,7 +102,9 @@ def fetch_news(n: int) -> list[dict]:
         return []
 
     accepted, results = [], []
-    skipped_noise = skipped_dup = 0
+    entity_count: dict[str, int] = {}
+    skipped_noise = skipped_dup = skipped_entity = 0
+
     for it in items:
         if is_noise(it["title"]):
             skipped_noise += 1
@@ -102,12 +112,20 @@ def fetch_news(n: int) -> list[dict]:
         if is_duplicate(it["title"], accepted):
             skipped_dup += 1
             continue
+        # 인물·기관명 캡: 같은 고유명사가 이미 1건 있으면 제외
+        ws = words(it["title"])
+        entities = [w for w in ws if len(w) >= 3 and w not in ENTITY_STOPWORDS]
+        if any(entity_count.get(e, 0) >= 1 for e in entities):
+            skipped_entity += 1
+            continue
+        for e in entities:
+            entity_count[e] = entity_count.get(e, 0) + 1
         accepted.append(it["title"])
         results.append(it)
         if len(results) == n:
             break
 
-    print(f"  노이즈 {skipped_noise}건 제거 | 중복 {skipped_dup}건 제거 | 선택 {len(results)}건")
+    print(f"  노이즈 {skipped_noise}건 | 중복 {skipped_dup}건 | 엔티티캡 {skipped_entity}건 제거 | 선택 {len(results)}건")
     for r in results:
         print(f"  ✓ {r['title'][:55]}")
     return results
