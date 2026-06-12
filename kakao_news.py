@@ -122,7 +122,20 @@ def fetch_section(label: str, rss_url: str, n: int, global_accepted: list[str]) 
 
 # ── URL 단축 ─────────────────────────────────────────────────────────────────
 
+def resolve_url(url: str) -> str:
+    """Google News 리다이렉트를 따라가 실제 기사 URL 반환"""
+    if not url:
+        return url
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            return resp.url   # urllib이 리다이렉트를 자동 추적
+    except Exception:
+        return url
+
+
 def shorten(url: str) -> str:
+    """TinyURL 단축 — 실패 시 원본 반환"""
     if not url:
         return ""
     try:
@@ -209,16 +222,16 @@ def main():
     # 2. 뉴스 수집 — 5 + 5 고정 구조
     global_accepted: list[str] = []
 
-    daegu = fetch_section("대구·경북 창업", RSS_DAEGU, 5, global_accepted)
+    daegu = fetch_section("대구·경북 창업", RSS_DAEGU, 3, global_accepted)
     global_accepted.extend(it["title"] for it in daegu)
 
-    national = fetch_section("전국 창업·스타트업", RSS_NATIONAL, 5, global_accepted)
+    national = fetch_section("전국 창업·스타트업", RSS_NATIONAL, 3, global_accepted)
     global_accepted.extend(it["title"] for it in national)
 
     # 3. URL 단축
     print("\n[TinyURL] 단축 중...")
     for it in daegu + national:
-        it["short"] = shorten(it["link"])
+        it["short"] = shorten(resolve_url(it["link"]))
 
     # 4. 메시지 조립
     if not daegu and not national:
