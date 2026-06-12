@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import sys
 import urllib.request
 import urllib.parse
@@ -51,7 +52,15 @@ def refresh_access_token() -> tuple[str, str | None]:
     return result["access_token"], new_rt
 
 
-def fetch_news(n: int = 3) -> list[str]:
+def normalize(title: str) -> str:
+    """출처(` - 언론사명`) 제거 후 공백·특수문자 정규화 → 중복 판별 키"""
+    title = re.sub(r"\s*-\s*\S+$", "", title)   # " - 뉴스1" 등 제거
+    title = re.sub(r"[\s\[\]()【】「」]", "", title)  # 공백·괄호 제거
+    return title.lower()
+
+
+def fetch_news(want: int = 5) -> list[str]:
+    """중복 제거 후 want건의 고유 뉴스를 반환"""
     print("[2] Google News RSS 요청 중...")
     try:
         req = urllib.request.Request(RSS_URL, headers={"User-Agent": "Mozilla/5.0"})
@@ -59,11 +68,22 @@ def fetch_news(n: int = 3) -> list[str]:
             raw = resp.read()
         print(f"  [+] RSS 응답 {len(raw)} bytes")
         root = ET.fromstring(raw)
-        items = root.findall(".//item")
-        print(f"  [+] 뉴스 항목 {len(items)}건 발견")
-        results = [f"• {(item.findtext('title') or '').strip()}" for item in items[:n]]
+        all_items = root.findall(".//item")
+        print(f"  [+] 전체 항목 {len(all_items)}건")
+
+        seen, results = set(), []
+        for item in all_items:
+            title = (item.findtext("title") or "").strip()
+            key   = normalize(title)
+            if key and key not in seen:
+                seen.add(key)
+                results.append(f"• {title}")
+            if len(results) == want:
+                break
+
+        print(f"  [+] 중복 제거 후 {len(results)}건 선택")
         for r in results:
-            print(f"  {r}")
+            print(f"    {r}")
         return results
     except Exception as e:
         print(f"  [!] RSS 오류: {e}")
@@ -102,15 +122,14 @@ def main():
 
     # 1. 토큰 갱신
     access_token, new_refresh_token = refresh_access_token()
-
     if new_refresh_token:
         with open(os.environ.get("GITHUB_ENV", "/dev/null"), "a") as f:
             f.write(f"NEW_REFRESH_TOKEN={new_refresh_token}\n")
 
-    # 2. 뉴스 수집
-    news = fetch_news()
+    # 2. 뉴스 수집 (중복 제거, 5건)
+    news = fetch_news(want=5)
     if not news:
-        print("[!] 뉴스 항목 없음 — 테스트 메시지로 대체 전송")
+        print("[!] 뉴스 항목 없음 — 대체 메시지 전송")
         news = ["• (뉴스를 불러오지 못했습니다. 연결을 확인하세요.)"]
 
     today = datetime.now().strftime("%Y.%m.%d")
