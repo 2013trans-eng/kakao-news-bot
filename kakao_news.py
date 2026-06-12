@@ -32,7 +32,14 @@ def words(title: str) -> frozenset:
     t = re.sub(r"\s*[-|]\s*\S+$", "", title)
     t = re.sub(r"[^\w]", " ", t)
     t = re.sub(r"(개|곳|명|억|조|만|원)\b", "", t)
-    return frozenset(w for w in t.split() if len(w) >= 2)
+    result = set()
+    for w in t.split():
+        if len(w) >= 2:
+            # 조사 제거: 어근만 비교해 '추경호가' == '추경호는' 처리
+            w = re.sub(r"(에서|으로|이|가|은|는|을|를|의|에|로|과|와|도|만)$", "", w)
+        if len(w) >= 2:
+            result.add(w)
+    return frozenset(result)
 
 
 def is_duplicate(title: str, accepted: list[str]) -> bool:
