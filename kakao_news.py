@@ -124,38 +124,77 @@ def fetch_section(label: str, rss_url: str, n: int, global_accepted: list[str]) 
 # ── URL 단축 ─────────────────────────────────────────────────────────────────
 
 def _decode_google_news_url(google_url: str) -> str:
-    """Google News RSS path의 base64 protobuf에서 실제 기사 URL 추출"""
+    """
+    Google News RSS URL의 base64 protobuf에서 실제 기사 URL 추출.
+    Method 1: 정식 protobuf 필드 파서 (length-delimited string 필드 탐색)
+    Method 2: decoded bytes에서 https:// 정규식으로 직접 추출
+    """
     try:
-        if "/rss/articles/" not in google_url:
+        for marker in ("/rss/articles/", "/articles/"):
+            if marker in google_url:
+                article_id = google_url.split(marker)[1].split("?")[0]
+                break
+        else:
             return ""
-        article_id = google_url.split("/rss/articles/")[1].split("?")[0]
+
         article_id = article_id.replace("-", "+").replace("_", "/")
         article_id += "=" * ((-len(article_id)) % 4)
-        decoded = base64.b64decode(article_id)
-        for prefix in (b"https://", b"http://"):
-            idx = decoded.find(prefix)
-            if idx < 0:
-                continue
-            end = idx
-            while end < len(decoded) and 0x20 <= decoded[end] < 0x7F:
-                end += 1
-            candidate = decoded[idx:end].decode("utf-8", errors="ignore").strip()
-            if candidate.startswith("http") and "." in candidate:
+        data = base64.b64decode(article_id)
+
+        # Method 1: protobuf 파서로 length-delimited 필드 순회
+        i = 0
+        while i < len(data):
+            tag = data[i]; i += 1
+            wire_type = tag & 0x07
+            if wire_type == 0:          # varint — 건너뜀
+                while i < len(data) and (data[i] & 0x80):
+                    i += 1
+                if i < len(data): i += 1
+            elif wire_type == 2:        # length-delimited
+                length = 0; shift = 0
+                while i < len(data):
+                    b = data[i]; i += 1
+                    length |= (b & 0x7F) << shift
+                    if not (b & 0x80): break
+                    shift += 7
+                if length <= 0 or i + length > len(data): break
+                field_data = data[i:i+length]; i += length
+                try:
+                    s = field_data.decode("utf-8")
+                    if re.match(r"https?://[a-zA-Z0-9]", s):
+                        return s.strip()
+                except UnicodeDecodeError:
+                    pass
+            else:
+                break
+
+        # Method 2: decoded bytes에서 URL 정규식으로 직접 추출
+        m = re.search(rb"https?://[!-~]+", data)
+        if m:
+            candidate = m.group().decode("ascii", errors="ignore")
+            if re.search(r"[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}", candidate):
                 return candidate
+
     except Exception:
         pass
     return ""
 
 
-def resolve_url(url: str) -> str:
-    """Google News 리다이렉트에서 실제 기사 URL 추출"""
+def resolve_url(url: str, title: str = "") -> str:
+    """
+    Google News 리다이렉트에서 실제 기사 URL 추출.
+    모든 방법이 실패하면 네이버 뉴스 검색 URL 반환 (절대 Google 리다이렉트 URL 반환 안 함).
+    """
     if not url:
         return url
-    # 1) base64 디코딩 — HTTP 요청 없이 즉시 실제 URL 추출
+
+    # 1) base64 decode (HTTP 요청 없이 즉시)
     decoded = _decode_google_news_url(url)
     if decoded:
+        print(f"    [decode OK] {decoded[:70]}")
         return decoded
-    # 2) HTTP 리다이렉트 추적 (fallback)
+
+    # 2) HTTP 리다이렉트 추적
     try:
         req = urllib.request.Request(url, headers={
             "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) "
@@ -165,9 +204,20 @@ def resolve_url(url: str) -> str:
         with urllib.request.urlopen(req, timeout=10) as resp:
             final = resp.url
             if "news.google.com" not in final:
+                print(f"    [redirect OK] {final[:70]}")
                 return final
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"    [redirect FAIL] {e}")
+
+    # 3) 최후 수단: 네이버 뉴스 검색 (항상 열림)
+    q = re.sub(r"\s*[-|]\s*\S+$", "", title).strip() if title else ""
+    if q:
+        naver = ("https://search.naver.com/search.naver"
+                 f"?where=news&query={urllib.parse.quote(q)}")
+        print(f"    [naver fallback] {q[:40]}")
+        return naver
+
+    print(f"    [FAIL] 원본 Google URL 반환")
     return url
 
 
@@ -265,10 +315,12 @@ def main():
     national = fetch_section("IT·스타트업", RSS_NATIONAL, 3, global_accepted)
     global_accepted.extend(it["title"] for it in national)
 
-    # 3. URL 단축
-    print("\n[TinyURL] 단축 중...")
+    # 3. URL 처리 (decode 성공 → TinyURL, 실패 → 네이버 검색 TinyURL)
+    print("\n[URL] 처리 중...")
     for it in daegu + national:
-        it["short"] = shorten(resolve_url(it["link"]))
+        print(f"  기사: {it['title'][:45]}...")
+        resolved = resolve_url(it["link"], it["title"])
+        it["short"] = shorten(resolved)
 
     # 4. 메시지 조립
     if not daegu and not national:
