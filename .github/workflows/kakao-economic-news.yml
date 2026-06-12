@@ -1,0 +1,47 @@
+name: 대구경북 경제뉴스 카카오톡 전송
+
+on:
+  schedule:
+    - cron: '20 23 * * *'  # 매일 KST 08:20 (= UTC 전날 23:20)
+  workflow_dispatch:
+
+jobs:
+  send-economic-news:
+    runs-on: ubuntu-latest
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+    permissions:
+      contents: read
+      actions: write
+
+    steps:
+      - name: 코드 체크아웃
+        uses: actions/checkout@v4.2.2
+
+      - name: Python 3.11 설정
+        uses: actions/setup-python@v5.6.0
+        with:
+          python-version: '3.11'
+
+      - name: 경제뉴스 수집 및 카카오톡 전송
+        id: send
+        run: python kakao_economic_news.py
+        env:
+          KAKAO_REST_API_KEY:  ${{ secrets.KAKAO_REST_API_KEY }}
+          KAKAO_REFRESH_TOKEN: ${{ secrets.KAKAO_REFRESH_TOKEN }}
+          NAVER_CLIENT_ID:     ${{ secrets.NAVER_CLIENT_ID }}
+          NAVER_CLIENT_SECRET: ${{ secrets.NAVER_CLIENT_SECRET }}
+
+      - name: Refresh Token 자동 갱신 (필요 시)
+        if: ${{ env.NEW_REFRESH_TOKEN != '' }}
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          NEW_REFRESH_TOKEN: ${{ env.NEW_REFRESH_TOKEN }}
+        run: |
+          if [ -z "$GH_TOKEN" ]; then
+            echo "GH_PAT Secret 없음 — 자동 갱신 건너뜀"
+            exit 0
+          fi
+          echo "$NEW_REFRESH_TOKEN" | gh secret set KAKAO_REFRESH_TOKEN \
+            --repo ${{ github.repository }}
+          echo "[+] KAKAO_REFRESH_TOKEN Secret 갱신 완료"

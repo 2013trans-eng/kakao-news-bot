@@ -1,0 +1,191 @@
+import html
+import json
+import os
+import re
+import sys
+import urllib.request
+import urllib.parse
+import urllib.error
+from datetime import datetime
+
+REST_API_KEY        = os.environ["KAKAO_REST_API_KEY"]
+REFRESH_TOKEN       = os.environ["KAKAO_REFRESH_TOKEN"]
+NAVER_CLIENT_ID     = os.environ["NAVER_CLIENT_ID"]
+NAVER_CLIENT_SECRET = os.environ["NAVER_CLIENT_SECRET"]
+
+TOKEN_URL        = "https://kauth.kakao.com/oauth/token"
+SEND_URL         = "https://kapi.kakao.com/v2/api/talk/memo/default/send"
+NAVER_SEARCH_URL = "https://openapi.naver.com/v1/search/news.json"
+
+QUERY   = "대구경북 경제"
+MAX_NUM = 10
+
+NOISE_KEYWORDS = [
+    "커넥팅데이", "데모데이", "IR피칭", "채용박람회", "네트워킹데이",
+    "보도자료", "설명회", "간담회", "수료식", "발대식", "모집 공고",
+]
+
+
+# ── 중복 판별 ─────────────────────────────────────────────────────────────────
+
+def words(title: str) -> frozenset:
+    t = re.sub(r"\s*[-|]\s*\S+$", "", title)
+    t = re.sub(r"[^\w]", " ", t)
+    t = re.sub(r"(개|곳|명|억|조|만|원)\b", "", t)
+    return frozenset(w for w in t.split() if len(w) >= 2)
+
+
+def is_duplicate(title: str, accepted: list[str]) -> bool:
+    w = words(title)
+    if not w:
+        return False
+    for other in accepted:
+        ow = words(other)
+        if not ow:
+            continue
+        if len(w & ow) / min(len(w), len(ow)) >= 0.50:
+            return True
+    return False
+
+
+def is_noise(title: str) -> bool:
+    return any(kw in title for kw in NOISE_KEYWORDS)
+
+
+# ── 네이버 뉴스 검색 ──────────────────────────────────────────────────────────
+
+def fetch_naver_news(query: str) -> list[dict]:
+    params = urllib.parse.urlencode({
+        "query":   query,
+        "display": 30,
+        "sort":    "date",
+    })
+    req = urllib.request.Request(f"{NAVER_SEARCH_URL}?{params}")
+    req.add_header("X-Naver-Client-Id",     NAVER_CLIENT_ID)
+    req.add_header("X-Naver-Client-Secret", NAVER_CLIENT_SECRET)
+    try:
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            data = json.loads(resp.read().decode())
+    except urllib.error.HTTPError as e:
+        raise Exception(f"Naver API HTTP {e.code}: {e.read().decode()}")
+    results = []
+    for item in data.get("items", []):
+        title = html.unescape(re.sub(r"<[^>]+>", "", item.get("title", ""))).strip()
+        link  = item.get("link", "").strip()
+        if title and link:
+            results.append({"title": title, "link": link})
+    return results
+
+
+def fetch_news(n: int) -> list[dict]:
+    print(f"\n[대구·경북 경제] {n}건 수집 중...")
+    try:
+        items = fetch_naver_news(QUERY)
+        print(f"  수신 {len(items)}건")
+    except Exception as e:
+        print(f"  오류: {e}")
+        return []
+
+    accepted, results = [], []
+    skipped_noise = skipped_dup = 0
+    for it in items:
+        if is_noise(it["title"]):
+            skipped_noise += 1
+            continue
+        if is_duplicate(it["title"], accepted):
+            skipped_dup += 1
+            continue
+        accepted.append(it["title"])
+        results.append(it)
+        if len(results) == n:
+            break
+
+    print(f"  노이즈 {skipped_noise}건 제거 | 중복 {skipped_dup}건 제거 | 선택 {len(results)}건")
+    for r in results:
+        print(f"  ✓ {r['title'][:55]}")
+    return results
+
+
+# ── 카카오 ────────────────────────────────────────────────────────────────────
+
+def refresh_access_token() -> tuple[str, str | None]:
+    print("[토큰] 갱신 중...")
+    data = {
+        "grant_type":    "refresh_token",
+        "client_id":     REST_API_KEY,
+        "refresh_token": REFRESH_TOKEN,
+    }
+    body = urllib.parse.urlencode(data).encode()
+    req  = urllib.request.Request(TOKEN_URL, data=body, method="POST")
+    req.add_header("Content-Type", "application/x-www-form-urlencoded")
+    try:
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            result = json.loads(resp.read().decode())
+    except urllib.error.HTTPError as e:
+        print(f"  오류 {e.code}: {e.read().decode()}")
+        sys.exit(1)
+    if "access_token" not in result:
+        print(f"  토큰 오류: {result}")
+        sys.exit(1)
+    print(f"  발급 완료 (앞 10자: {result['access_token'][:10]}...)")
+    return result["access_token"], result.get("refresh_token")
+
+
+def send_message(access_token: str, text: str) -> dict:
+    print(f"\n[카카오] 전송 — {len(text)}자 / 2000자 한도")
+    template = {
+        "object_type": "text",
+        "text":        text[:2000],
+        "link":        {"web_url": "https://news.naver.com"},
+    }
+    payload = urllib.parse.urlencode(
+        {"template_object": json.dumps(template, ensure_ascii=False)}
+    ).encode("utf-8")
+    req = urllib.request.Request(SEND_URL, data=payload, method="POST")
+    req.add_header("Authorization",  f"Bearer {access_token}")
+    req.add_header("Content-Type",   "application/x-www-form-urlencoded")
+    try:
+        with urllib.request.urlopen(req) as resp:
+            raw = resp.read().decode()
+            print(f"  [HTTP {resp.status}] {raw}")
+            return json.loads(raw)
+    except urllib.error.HTTPError as e:
+        print(f"  [HTTPError {e.code}] {e.read().decode()}")
+        raise
+
+
+# ── 메인 ─────────────────────────────────────────────────────────────────────
+
+def main():
+    print(f"{'='*50}")
+    print(f"실행 시각: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} UTC")
+    print(f"{'='*50}")
+
+    access_token, new_rt = refresh_access_token()
+    if new_rt:
+        with open(os.environ.get("GITHUB_ENV", "/dev/null"), "a") as f:
+            f.write(f"NEW_REFRESH_TOKEN={new_rt}\n")
+
+    items = fetch_news(MAX_NUM)
+
+    if not items:
+        body = "뉴스를 불러오지 못했습니다."
+    else:
+        today = datetime.now().strftime("%Y.%m.%d")
+        lines = [f"📈 대구·경북 경제 뉴스 ({today})\n"]
+        for it in items:
+            lines.append(f"• {it['title']}\n  {it['link']}")
+        body = "\n\n".join(lines)
+
+    print(f"\n{'='*50}\n전송 메시지 ({len(body)}자):\n{body}\n{'='*50}")
+
+    result = send_message(access_token, body)
+    if result.get("result_code") == 0:
+        print("[+] 전송 성공!")
+    else:
+        print(f"[!] 전송 실패: {result}")
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()
