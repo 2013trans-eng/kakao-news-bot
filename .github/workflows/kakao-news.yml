@@ -2,7 +2,7 @@ name: 대경 창업 뉴스 카카오톡 전송
 
 on:
   schedule:
-    - cron: '30 23 * * *'  # 매일 KST 08:30 (= UTC 전날 23:30)
+    - cron: '30 22 * * *'  # 매일 KST 07:30 (= UTC 22:30)
   workflow_dispatch:        # 수동 실행 버튼
 
 jobs:
