@@ -221,19 +221,6 @@ def resolve_url(url: str, title: str = "") -> str:
     return url
 
 
-def shorten(url: str) -> str:
-    """TinyURL 단축 — 실패 시 원본 반환"""
-    if not url:
-        return ""
-    try:
-        api = "https://tinyurl.com/api-create.php?url=" + urllib.parse.quote(url, safe="")
-        req = urllib.request.Request(api, headers={"User-Agent": "Mozilla/5.0"})
-        with urllib.request.urlopen(req, timeout=8) as resp:
-            short = resp.read().decode().strip()
-        return short if short.startswith("http") else url
-    except Exception:
-        return url
-
 
 # ── 카카오 ────────────────────────────────────────────────────────────────────
 
@@ -315,12 +302,11 @@ def main():
     national = fetch_section("IT·스타트업", RSS_NATIONAL, 3, global_accepted)
     global_accepted.extend(it["title"] for it in national)
 
-    # 3. URL 처리 (decode 성공 → TinyURL, 실패 → 네이버 검색 TinyURL)
+    # 3. URL 처리 (decode 성공 → 직접 URL, 실패 → 네이버 검색 URL)
     print("\n[URL] 처리 중...")
     for it in daegu + national:
         print(f"  기사: {it['title'][:45]}...")
-        resolved = resolve_url(it["link"], it["title"])
-        it["short"] = shorten(resolved)
+        it["short"] = resolve_url(it["link"], it["title"])
 
     # 4. 메시지 조립
     if not daegu and not national:
