@@ -1,0 +1,5 @@
+kakao_tokens.json
+*.log
+__pycache__/
+*.pyc
+.env

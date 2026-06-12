@@ -1,0 +1,41 @@
+name: 대경 창업 뉴스 카카오톡 전송
+
+on:
+  schedule:
+    - cron: '0 0 * * *'   # 매일 KST 09:00 (= UTC 00:00)
+  workflow_dispatch:        # 수동 실행 버튼
+
+jobs:
+  send-news:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: write        # Secret 자동 갱신용
+
+    steps:
+      - name: 코드 체크아웃
+        uses: actions/checkout@v4
+
+      - name: Python 3.11 설정
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: 뉴스 수집 및 카카오톡 전송
+        id: send
+        run: python kakao_news.py
+        env:
+          KAKAO_REST_API_KEY:  ${{ secrets.KAKAO_REST_API_KEY }}
+          KAKAO_REFRESH_TOKEN: ${{ secrets.KAKAO_REFRESH_TOKEN }}
+
+      # Kakao가 새 refresh_token을 발급한 경우 Secret을 자동으로 갱신합니다.
+      # GH_PAT secret이 없으면 이 단계는 건너뜁니다.
+      - name: Refresh Token 자동 갱신 (필요 시)
+        if: ${{ env.NEW_REFRESH_TOKEN != '' && secrets.GH_PAT != '' }}
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          NEW_REFRESH_TOKEN: ${{ env.NEW_REFRESH_TOKEN }}
+        run: |
+          echo "$NEW_REFRESH_TOKEN" | gh secret set KAKAO_REFRESH_TOKEN \
+            --repo ${{ github.repository }}
+          echo "[+] KAKAO_REFRESH_TOKEN Secret 갱신 완료"
