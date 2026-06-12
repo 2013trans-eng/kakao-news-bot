@@ -18,7 +18,7 @@ SEND_URL         = "https://kapi.kakao.com/v2/api/talk/memo/default/send"
 NAVER_SEARCH_URL = "https://openapi.naver.com/v1/search/news.json"
 
 QUERY_DAEGU    = "대구경북 창업 스타트업"
-QUERY_NATIONAL = "스타트업 창업 투자 정책"
+QUERY_NATIONAL = "창업지원 정책 스타트업 벤처"
 
 NOISE_KEYWORDS = [
     "커넥팅데이", "데모데이", "IR피칭", "채용박람회", "네트워킹데이",
@@ -54,12 +54,12 @@ def is_noise(title: str) -> bool:
 
 # ── 네이버 뉴스 검색 ──────────────────────────────────────────────────────────
 
-def fetch_naver_news(query: str) -> list[dict]:
+def fetch_naver_news(query: str, sort: str = "date") -> list[dict]:
     """Naver 뉴스 검색 API — n.news.naver.com 직접 링크 반환"""
     params = urllib.parse.urlencode({
         "query":   query,
         "display": 20,
-        "sort":    "date",
+        "sort":    sort,
     })
     req = urllib.request.Request(f"{NAVER_SEARCH_URL}?{params}")
     req.add_header("X-Naver-Client-Id",     NAVER_CLIENT_ID)
@@ -80,10 +80,11 @@ def fetch_naver_news(query: str) -> list[dict]:
 
 # ── 섹션별 수집 ───────────────────────────────────────────────────────────────
 
-def fetch_section(label: str, query: str, n: int, global_accepted: list[str]) -> list[dict]:
-    print(f"\n[{label}] {n}건 수집 중...")
+def fetch_section(label: str, query: str, n: int, global_accepted: list[str],
+                  sort: str = "date") -> list[dict]:
+    print(f"\n[{label}] {n}건 수집 중... (sort={sort})")
     try:
-        items = fetch_naver_news(query)
+        items = fetch_naver_news(query, sort)
         print(f"  수신 {len(items)}건")
     except Exception as e:
         print(f"  오류: {e}")
@@ -188,7 +189,7 @@ def main():
     daegu    = fetch_section("대구·경북 창업", QUERY_DAEGU,    4, global_accepted)
     global_accepted.extend(it["title"] for it in daegu)
 
-    national = fetch_section("IT·스타트업",   QUERY_NATIONAL, 4, global_accepted)
+    national = fetch_section("IT·스타트업",   QUERY_NATIONAL, 4, global_accepted, sort="sim")
     global_accepted.extend(it["title"] for it in national)
 
     # 3. 메시지 조립
