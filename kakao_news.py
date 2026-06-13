@@ -65,7 +65,7 @@ def is_fresh(pub_date_str: str) -> bool:
     try:
         pub_dt = parsedate_to_datetime(pub_date_str)
         age_hours = (datetime.now(timezone.utc) - pub_dt).total_seconds() / 3600
-        return age_hours <= 24
+        return age_hours <= 48
     except Exception:
         return True
 
