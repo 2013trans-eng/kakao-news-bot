@@ -85,7 +85,7 @@ def is_fresh(pub_date_str: str) -> bool:
 def fetch_naver_news(query: str) -> list[dict]:
     params = urllib.parse.urlencode({
         "query":   query,
-        "display": 30,
+        "display": 50,
         "sort":    "date",
     })
     req = urllib.request.Request(f"{NAVER_SEARCH_URL}?{params}")
