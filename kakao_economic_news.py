@@ -71,11 +71,11 @@ def is_noise(title: str) -> bool:
 
 
 def is_fresh(pub_date_str: str) -> bool:
-    """12시간 이내 발행 기사인지 확인"""
+    """24시간 이내 발행 기사인지 확인"""
     try:
         pub_dt = parsedate_to_datetime(pub_date_str)
         age_hours = (datetime.now(timezone.utc) - pub_dt).total_seconds() / 3600
-        return age_hours <= 12
+        return age_hours <= 24
     except Exception:
         return True
 
