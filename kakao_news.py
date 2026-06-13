@@ -76,7 +76,7 @@ def fetch_naver_news(query: str, sort: str = "date") -> list[dict]:
     """Naver 뉴스 검색 API — n.news.naver.com 직접 링크 반환"""
     params = urllib.parse.urlencode({
         "query":   query,
-        "display": 20,
+        "display": 50,
         "sort":    sort,
     })
     req = urllib.request.Request(f"{NAVER_SEARCH_URL}?{params}")
