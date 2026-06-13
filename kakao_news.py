@@ -72,11 +72,14 @@ def is_noise(title: str) -> bool:
 
 
 def is_fresh(pub_date_str: str) -> bool:
-    """24시간 이내 발행 기사인지 확인"""
+    """한국시간(KST) 기준 당일 발행 기사인지 확인"""
     try:
+        from datetime import timedelta
         pub_dt = parsedate_to_datetime(pub_date_str)
-        age_hours = (datetime.now(timezone.utc) - pub_dt).total_seconds() / 3600
-        return age_hours <= 24
+        kst = timezone(timedelta(hours=9))
+        today_kst = datetime.now(kst).date()
+        pub_date_kst = pub_dt.astimezone(kst).date()
+        return pub_date_kst == today_kst
     except Exception:
         return True
 
