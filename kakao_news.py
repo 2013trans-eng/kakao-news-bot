@@ -213,7 +213,7 @@ def main():
 
     # 대구경북 기사가 부족하면 IT 섹션으로 나머지 채움 (총 8건 유지)
     it_target = 4 + (4 - len(daegu))
-    national = fetch_section("IT·스타트업",   QUERY_NATIONAL, it_target, global_accepted, sort="sim")
+    national = fetch_section("IT·스타트업",   QUERY_NATIONAL, it_target, global_accepted, sort="date")
     global_accepted.extend(it["title"] for it in national)
 
     # 3. 메시지 조립
