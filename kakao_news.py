@@ -211,17 +211,17 @@ def main():
     # 2. 뉴스 수집 — 3단계 폴백 구조 (총 8건)
     global_accepted: list[str] = []
 
-    # 1단계: 대구경북 창업 (최대 4건)
-    daegu = fetch_section("대구·경북 창업", QUERY_DAEGU, 4, global_accepted)
+    # 1단계: 대구경북 창업 (최대 6건)
+    daegu = fetch_section("대구·경북 창업", QUERY_DAEGU, 6, global_accepted)
     global_accepted.extend(it["title"] for it in daegu)
 
-    # 2단계: 부족하면 일반 창업뉴스로 보충 (4건 채우기)
-    if len(daegu) < 4:
-        supplement = fetch_section("창업·스타트업", QUERY_STARTUP, 4 - len(daegu), global_accepted)
+    # 2단계: 부족하면 일반 창업뉴스로 보충 (6건 채우기)
+    if len(daegu) < 6:
+        supplement = fetch_section("창업·스타트업", QUERY_STARTUP, 6 - len(daegu), global_accepted)
         daegu.extend(supplement)
         global_accepted.extend(it["title"] for it in supplement)
 
-    # 3단계: 나머지는 IT로 채움 (총 8건)
+    # 3단계: 나머지는 IT로 채움 (총 8건, IT는 2~4건)
     it_target = 8 - len(daegu)
     national = fetch_section("IT·기술", QUERY_IT, it_target, global_accepted)
     global_accepted.extend(it["title"] for it in national)
