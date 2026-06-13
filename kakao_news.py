@@ -227,21 +227,20 @@ def main():
 
     # 2. 뉴스 수집 — 3단계 폴백 구조 (총 8건)
     global_accepted: list[str] = []
-    entity_count: dict[str, int] = {}
 
-    # 1단계: 대구경북 창업 (최대 6건)
-    daegu = fetch_section("대구·경북 창업", QUERY_DAEGU, 6, global_accepted, entity_count=entity_count)
+    # 1단계: 대구경북 창업 (최대 6건) — 섹션 내 엔티티 캡 적용
+    daegu = fetch_section("대구·경북 창업", QUERY_DAEGU, 6, global_accepted, entity_count={})
     global_accepted.extend(it["title"] for it in daegu)
 
     # 2단계: 부족하면 일반 창업뉴스로 보충 (6건 채우기)
     if len(daegu) < 6:
-        supplement = fetch_section("창업·스타트업", QUERY_STARTUP, 6 - len(daegu), global_accepted, entity_count=entity_count)
+        supplement = fetch_section("창업·스타트업", QUERY_STARTUP, 6 - len(daegu), global_accepted, entity_count={})
         daegu.extend(supplement)
         global_accepted.extend(it["title"] for it in supplement)
 
-    # 3단계: 나머지는 IT로 채움 (총 8건, IT는 2~4건)
+    # 3단계: 나머지는 IT로 채움 (총 8건, IT는 2~4건) — 별도 엔티티 캡
     it_target = 8 - len(daegu)
-    national = fetch_section("IT·기술", QUERY_IT, it_target, global_accepted, entity_count=entity_count)
+    national = fetch_section("IT·기술", QUERY_IT, it_target, global_accepted, entity_count={})
     global_accepted.extend(it["title"] for it in national)
 
     # 3. 메시지 조립
