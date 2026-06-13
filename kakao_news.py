@@ -29,6 +29,14 @@ NOISE_KEYWORDS = [
     "환율", "주가", "코스피", "코스닥", "채권", "금리", "물가",
 ]
 
+ENTITY_STOPWORDS = {
+    "창업", "스타트업", "벤처", "기술", "뉴스", "기업", "투자", "정책",
+    "대구", "경북", "대구경북", "한국", "정부", "지원", "발표", "추진",
+    "확대", "사업", "지역", "성장", "올해", "내년", "시장", "산업",
+    "관련", "진행", "예정", "계획", "효과", "결과", "문제", "상황",
+    "방안", "개선", "강화", "서비스", "플랫폼", "솔루션",
+}
+
 
 # ── 중복 판별 ─────────────────────────────────────────────────────────────────
 
@@ -103,7 +111,8 @@ def fetch_naver_news(query: str, sort: str = "date") -> list[dict]:
 # ── 섹션별 수집 ───────────────────────────────────────────────────────────────
 
 def fetch_section(label: str, query: str, n: int, global_accepted: list[str],
-                  sort: str = "date") -> list[dict]:
+                  sort: str = "date",
+                  entity_count: dict | None = None) -> list[dict]:
     print(f"\n[{label}] {n}건 수집 중... (sort={sort})")
     try:
         items = fetch_naver_news(query, sort)
@@ -114,7 +123,7 @@ def fetch_section(label: str, query: str, n: int, global_accepted: list[str],
 
     accepted_titles = list(global_accepted)
     results = []
-    skipped_noise = skipped_dup = skipped_old = 0
+    skipped_noise = skipped_dup = skipped_old = skipped_entity = 0
 
     for it in items:
         if not is_fresh(it["pubDate"]):
@@ -126,12 +135,20 @@ def fetch_section(label: str, query: str, n: int, global_accepted: list[str],
         if is_duplicate(it["title"], accepted_titles):
             skipped_dup += 1
             continue
+        if entity_count is not None:
+            ws = words(it["title"])
+            entities = [w for w in ws if len(w) >= 3 and w not in ENTITY_STOPWORDS]
+            if any(entity_count.get(e, 0) >= 1 for e in entities):
+                skipped_entity += 1
+                continue
+            for e in entities:
+                entity_count[e] = entity_count.get(e, 0) + 1
         accepted_titles.append(it["title"])
         results.append(it)
         if len(results) == n:
             break
 
-    print(f"  오래된 기사 {skipped_old}건 | 노이즈 {skipped_noise}건 | 중복 {skipped_dup}건 제거 | 선택 {len(results)}건")
+    print(f"  오래된 기사 {skipped_old}건 | 노이즈 {skipped_noise}건 | 중복 {skipped_dup}건 | 엔티티캡 {skipped_entity}건 제거 | 선택 {len(results)}건")
     for r in results:
         print(f"  ✓ {r['title'][:55]}")
     return results
@@ -210,20 +227,21 @@ def main():
 
     # 2. 뉴스 수집 — 3단계 폴백 구조 (총 8건)
     global_accepted: list[str] = []
+    entity_count: dict[str, int] = {}
 
     # 1단계: 대구경북 창업 (최대 6건)
-    daegu = fetch_section("대구·경북 창업", QUERY_DAEGU, 6, global_accepted)
+    daegu = fetch_section("대구·경북 창업", QUERY_DAEGU, 6, global_accepted, entity_count=entity_count)
     global_accepted.extend(it["title"] for it in daegu)
 
     # 2단계: 부족하면 일반 창업뉴스로 보충 (6건 채우기)
     if len(daegu) < 6:
-        supplement = fetch_section("창업·스타트업", QUERY_STARTUP, 6 - len(daegu), global_accepted)
+        supplement = fetch_section("창업·스타트업", QUERY_STARTUP, 6 - len(daegu), global_accepted, entity_count=entity_count)
         daegu.extend(supplement)
         global_accepted.extend(it["title"] for it in supplement)
 
     # 3단계: 나머지는 IT로 채움 (총 8건, IT는 2~4건)
     it_target = 8 - len(daegu)
-    national = fetch_section("IT·기술", QUERY_IT, it_target, global_accepted)
+    national = fetch_section("IT·기술", QUERY_IT, it_target, global_accepted, entity_count=entity_count)
     global_accepted.extend(it["title"] for it in national)
 
     # 3. 메시지 조립
