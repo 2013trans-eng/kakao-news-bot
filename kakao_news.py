@@ -211,7 +211,9 @@ def main():
     daegu    = fetch_section("대구·경북 창업", QUERY_DAEGU,    4, global_accepted)
     global_accepted.extend(it["title"] for it in daegu)
 
-    national = fetch_section("IT·스타트업",   QUERY_NATIONAL, 4, global_accepted, sort="sim")
+    # 대구경북 기사가 부족하면 IT 섹션으로 나머지 채움 (총 8건 유지)
+    it_target = 4 + (4 - len(daegu))
+    national = fetch_section("IT·스타트업",   QUERY_NATIONAL, it_target, global_accepted, sort="sim")
     global_accepted.extend(it["title"] for it in national)
 
     # 3. 메시지 조립
