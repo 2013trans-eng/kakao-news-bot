@@ -6,7 +6,8 @@ import sys
 import urllib.request
 import urllib.parse
 import urllib.error
-from datetime import datetime
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 
 REST_API_KEY        = os.environ["KAKAO_REST_API_KEY"]
 REFRESH_TOKEN       = os.environ["KAKAO_REFRESH_TOKEN"]
@@ -59,6 +60,16 @@ def is_noise(title: str) -> bool:
     return any(kw in title for kw in NOISE_KEYWORDS)
 
 
+def is_fresh(pub_date_str: str) -> bool:
+    """24시간 이내 발행 기사인지 확인"""
+    try:
+        pub_dt = parsedate_to_datetime(pub_date_str)
+        age_hours = (datetime.now(timezone.utc) - pub_dt).total_seconds() / 3600
+        return age_hours <= 24
+    except Exception:
+        return True
+
+
 # ── 네이버 뉴스 검색 ──────────────────────────────────────────────────────────
 
 def fetch_naver_news(query: str, sort: str = "date") -> list[dict]:
@@ -78,10 +89,11 @@ def fetch_naver_news(query: str, sort: str = "date") -> list[dict]:
         raise Exception(f"Naver API HTTP {e.code}: {e.read().decode()}")
     results = []
     for item in data.get("items", []):
-        title = html.unescape(re.sub(r"<[^>]+>", "", item.get("title", ""))).strip()
-        link  = item.get("link", "").strip()
+        title   = html.unescape(re.sub(r"<[^>]+>", "", item.get("title", ""))).strip()
+        link    = item.get("link", "").strip()
+        pub_date = item.get("pubDate", "")
         if title and link:
-            results.append({"title": title, "link": link})
+            results.append({"title": title, "link": link, "pubDate": pub_date})
     return results
 
 
@@ -99,9 +111,12 @@ def fetch_section(label: str, query: str, n: int, global_accepted: list[str],
 
     accepted_titles = list(global_accepted)
     results = []
-    skipped_noise = skipped_dup = 0
+    skipped_noise = skipped_dup = skipped_old = 0
 
     for it in items:
+        if not is_fresh(it["pubDate"]):
+            skipped_old += 1
+            continue
         if is_noise(it["title"]):
             skipped_noise += 1
             continue
@@ -113,7 +128,7 @@ def fetch_section(label: str, query: str, n: int, global_accepted: list[str],
         if len(results) == n:
             break
 
-    print(f"  노이즈 {skipped_noise}건 제거 | 중복 {skipped_dup}건 제거 | 선택 {len(results)}건")
+    print(f"  오래된 기사 {skipped_old}건 | 노이즈 {skipped_noise}건 | 중복 {skipped_dup}건 제거 | 선택 {len(results)}건")
     for r in results:
         print(f"  ✓ {r['title'][:55]}")
     return results
