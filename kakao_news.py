@@ -18,8 +18,9 @@ TOKEN_URL        = "https://kauth.kakao.com/oauth/token"
 SEND_URL         = "https://kapi.kakao.com/v2/api/talk/memo/default/send"
 NAVER_SEARCH_URL = "https://openapi.naver.com/v1/search/news.json"
 
-QUERY_DAEGU    = "대구경북 창업 스타트업"
-QUERY_NATIONAL = "창업지원 정책 스타트업 벤처"
+QUERY_DAEGU   = "대구경북 창업"
+QUERY_STARTUP = "창업 스타트업 벤처"
+QUERY_IT      = "AI IT 기술 스타트업"
 
 NOISE_KEYWORDS = [
     "커넥팅데이", "데모데이", "IR피칭", "채용박람회", "네트워킹데이",
@@ -207,15 +208,22 @@ def main():
         with open(os.environ.get("GITHUB_ENV", "/dev/null"), "a") as f:
             f.write(f"NEW_REFRESH_TOKEN={new_rt}\n")
 
-    # 2. 뉴스 수집 — 3 + 3 구조
+    # 2. 뉴스 수집 — 3단계 폴백 구조 (총 8건)
     global_accepted: list[str] = []
 
-    daegu    = fetch_section("대구·경북 창업", QUERY_DAEGU,    4, global_accepted)
+    # 1단계: 대구경북 창업 (최대 4건)
+    daegu = fetch_section("대구·경북 창업", QUERY_DAEGU, 4, global_accepted)
     global_accepted.extend(it["title"] for it in daegu)
 
-    # 대구경북 기사가 부족하면 IT 섹션으로 나머지 채움 (총 8건 유지)
-    it_target = 4 + (4 - len(daegu))
-    national = fetch_section("IT·스타트업",   QUERY_NATIONAL, it_target, global_accepted, sort="date")
+    # 2단계: 부족하면 일반 창업뉴스로 보충 (4건 채우기)
+    if len(daegu) < 4:
+        supplement = fetch_section("창업·스타트업", QUERY_STARTUP, 4 - len(daegu), global_accepted)
+        daegu.extend(supplement)
+        global_accepted.extend(it["title"] for it in supplement)
+
+    # 3단계: 나머지는 IT로 채움 (총 8건)
+    it_target = 8 - len(daegu)
+    national = fetch_section("IT·기술", QUERY_IT, it_target, global_accepted)
     global_accepted.extend(it["title"] for it in national)
 
     # 3. 메시지 조립
@@ -225,9 +233,9 @@ def main():
         today = datetime.now().strftime("%Y.%m.%d")
         sections = [f"🚀 오늘의 창업·IT 뉴스 ({today})"]
         if daegu:
-            sections.append(format_section("대구·경북 창업", daegu))
+            sections.append(format_section("창업", daegu))
         if national:
-            sections.append(format_section("IT·스타트업", national))
+            sections.append(format_section("IT·기술", national))
         body = "\n\n".join(sections)
 
     print(f"\n{'='*50}\n전송 메시지 ({len(body)}자):\n{body}\n{'='*50}")
