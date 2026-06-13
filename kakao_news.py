@@ -20,7 +20,8 @@ NAVER_SEARCH_URL = "https://openapi.naver.com/v1/search/news.json"
 
 QUERY_DAEGU   = "대구경북 창업"
 QUERY_STARTUP = "창업 스타트업 벤처"
-QUERY_IT      = "AI IT 기술 스타트업"
+QUERY_IT_A    = "AI 인공지능 기술"
+QUERY_IT_B    = "IT 스타트업 플랫폼"
 
 NOISE_KEYWORDS = [
     "커넥팅데이", "데모데이", "IR피칭", "채용박람회", "네트워킹데이",
@@ -110,22 +111,30 @@ def fetch_naver_news(query: str, sort: str = "date") -> list[dict]:
 
 # ── 섹션별 수집 ───────────────────────────────────────────────────────────────
 
-def fetch_section(label: str, query: str, n: int, global_accepted: list[str],
+def fetch_section(label: str, queries: list[str] | str, n: int, global_accepted: list[str],
                   sort: str = "date",
                   entity_count: dict | None = None) -> list[dict]:
+    if isinstance(queries, str):
+        queries = [queries]
     print(f"\n[{label}] {n}건 수집 중... (sort={sort})")
-    try:
-        items = fetch_naver_news(query, sort)
-        print(f"  수신 {len(items)}건")
-    except Exception as e:
-        print(f"  오류: {e}")
-        return []
+    raw = []
+    seen_links = set()
+    for q in queries:
+        try:
+            items = fetch_naver_news(q, sort)
+            for it in items:
+                if it["link"] not in seen_links:
+                    seen_links.add(it["link"])
+                    raw.append(it)
+        except Exception as e:
+            print(f"  오류({q}): {e}")
+    print(f"  수신 {len(raw)}건 (쿼리 {len(queries)}개)")
 
     accepted_titles = list(global_accepted)
     results = []
     skipped_noise = skipped_dup = skipped_old = skipped_entity = 0
 
-    for it in items:
+    for it in raw:
         if not is_fresh(it["pubDate"]):
             skipped_old += 1
             continue
@@ -238,9 +247,9 @@ def main():
         daegu.extend(supplement)
         global_accepted.extend(it["title"] for it in supplement)
 
-    # 3단계: 나머지는 IT로 채움 (총 8건, IT는 2~4건) — 별도 엔티티 캡
+    # 3단계: 나머지는 IT로 채움 (총 8건, IT는 2~4건) — 두 쿼리 병합, 엔티티 캡 없음
     it_target = 8 - len(daegu)
-    national = fetch_section("IT·기술", QUERY_IT, it_target, global_accepted, entity_count={})
+    national = fetch_section("IT·기술", [QUERY_IT_A, QUERY_IT_B], it_target, global_accepted)
     global_accepted.extend(it["title"] for it in national)
 
     # 3. 메시지 조립
