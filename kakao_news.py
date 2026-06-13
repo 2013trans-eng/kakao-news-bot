@@ -221,7 +221,7 @@ def main():
         body = "뉴스를 불러오지 못했습니다."
     else:
         today = datetime.now().strftime("%Y.%m.%d")
-        sections = [f"🚀 오늘의 창업 뉴스 ({today})"]
+        sections = [f"🚀 오늘의 창업·IT 뉴스 ({today})"]
         if daegu:
             sections.append(format_section("대구·경북 창업", daegu))
         if national:
