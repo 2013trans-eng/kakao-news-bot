@@ -217,19 +217,22 @@ def send_message(access_token: str, text: str) -> dict:
 
 # ── 이메일 ───────────────────────────────────────────────────────────────────
 
+RECIPIENTS = [GMAIL_ADDRESS, "wondertajo@gmail.com"]
+
 def send_email(subject: str, body: str) -> None:
     if not GMAIL_ADDRESS or not GMAIL_APP_PASSWORD:
         print("[이메일] 환경변수 없음 — 건너뜀")
         return
-    print(f"\n[이메일] 전송 중 → {GMAIL_ADDRESS}")
+    to_list = [r for r in RECIPIENTS if r]
+    print(f"\n[이메일] 전송 중 → {', '.join(to_list)}")
     msg = MIMEText(body, "plain", "utf-8")
     msg["Subject"] = subject
     msg["From"]    = GMAIL_ADDRESS
-    msg["To"]      = GMAIL_ADDRESS
+    msg["To"]      = ", ".join(to_list)
     with smtplib.SMTP("smtp.gmail.com", 587) as smtp:
         smtp.starttls()
         smtp.login(GMAIL_ADDRESS, GMAIL_APP_PASSWORD)
-        smtp.sendmail(GMAIL_ADDRESS, GMAIL_ADDRESS, msg.as_bytes())
+        smtp.sendmail(GMAIL_ADDRESS, to_list, msg.as_bytes())
     print("  전송 완료")
 
 
