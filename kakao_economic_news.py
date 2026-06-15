@@ -2,17 +2,21 @@ import html
 import json
 import os
 import re
+import smtplib
 import sys
 import urllib.request
 import urllib.parse
 import urllib.error
 from datetime import datetime, timezone
+from email.mime.text import MIMEText
 from email.utils import parsedate_to_datetime
 
 REST_API_KEY        = os.environ["KAKAO_REST_API_KEY"]
 REFRESH_TOKEN       = os.environ["KAKAO_REFRESH_TOKEN"]
 NAVER_CLIENT_ID     = os.environ["NAVER_CLIENT_ID"]
 NAVER_CLIENT_SECRET = os.environ["NAVER_CLIENT_SECRET"]
+GMAIL_ADDRESS       = os.environ.get("GMAIL_ADDRESS", "")
+GMAIL_APP_PASSWORD  = os.environ.get("GMAIL_APP_PASSWORD", "")
 
 TOKEN_URL        = "https://kauth.kakao.com/oauth/token"
 SEND_URL         = "https://kapi.kakao.com/v2/api/talk/memo/default/send"
@@ -196,6 +200,24 @@ def send_message(access_token: str, text: str) -> dict:
         raise
 
 
+# ── 이메일 ───────────────────────────────────────────────────────────────────
+
+def send_email(subject: str, body: str) -> None:
+    if not GMAIL_ADDRESS or not GMAIL_APP_PASSWORD:
+        print("[이메일] 환경변수 없음 — 건너뜀")
+        return
+    print(f"\n[이메일] 전송 중 → {GMAIL_ADDRESS}")
+    msg = MIMEText(body, "plain", "utf-8")
+    msg["Subject"] = subject
+    msg["From"]    = GMAIL_ADDRESS
+    msg["To"]      = GMAIL_ADDRESS
+    with smtplib.SMTP("smtp.gmail.com", 587) as smtp:
+        smtp.starttls()
+        smtp.login(GMAIL_ADDRESS, GMAIL_APP_PASSWORD)
+        smtp.sendmail(GMAIL_ADDRESS, GMAIL_ADDRESS, msg.as_bytes())
+    print("  전송 완료")
+
+
 # ── 메인 ─────────────────────────────────────────────────────────────────────
 
 def main():
@@ -223,10 +245,13 @@ def main():
 
     result = send_message(access_token, body)
     if result.get("result_code") == 0:
-        print("[+] 전송 성공!")
+        print("[+] 카카오 전송 성공!")
     else:
-        print(f"[!] 전송 실패: {result}")
+        print(f"[!] 카카오 전송 실패: {result}")
         sys.exit(1)
+
+    today = datetime.now().strftime("%Y.%m.%d")
+    send_email(f"대구·경북 경제 뉴스 ({today})", body)
 
 
 if __name__ == "__main__":
