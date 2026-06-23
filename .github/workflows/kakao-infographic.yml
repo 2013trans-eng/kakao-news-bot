@@ -21,6 +21,9 @@ jobs:
         with:
           python-version: '3.11'
 
+      - name: 패키지 설치
+        run: pip install Pillow
+
       - name: 경제 인포그래픽 수집 및 전송
         id: send
         run: python kakao_infographic.py

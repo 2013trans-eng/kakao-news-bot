@@ -1,5 +1,6 @@
 import base64
 import html as html_lib
+import io
 import json
 import os
 import re
@@ -12,6 +13,8 @@ import urllib.error
 from datetime import datetime
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
+
+from PIL import Image
 
 REST_API_KEY        = os.environ["KAKAO_REST_API_KEY"]
 REFRESH_TOKEN       = os.environ["KAKAO_REFRESH_TOKEN"]
@@ -37,6 +40,9 @@ SOURCES = [
     ("에너지경제연구원",   "https://www.keei.re.kr/gallery.es?mid=a10206010000&bid=0001"),
 ]
 
+# 소스별 최대 수집 수
+PER_SOURCE = 5
+
 # 제외할 키워드 (로고·아이콘·버튼 등 장식 이미지)
 SKIP_KW = [
     "icon", "logo", "btn", "arrow", "bullet", "blank", "loading", "spinner",
@@ -44,7 +50,12 @@ SKIP_KW = [
     "facebook", "twitter", "youtube", "kakao", "naver", "share", "sns_",
     "header", "footer", "prev", "next", "close", "del_", "edit_",
 ]
+
+# 연합뉴스: 경제/금융 섹션 URL 패턴만 허용
+YNA_ECON_KW = ["/economy/", "/business/", "/finance/", "/industry/", "GYH", "AKR"]
+
 IMG_EXTS = (".jpg", ".jpeg", ".png", ".gif", ".webp")
+MIN_FILE_SIZE = 50 * 1024  # 50KB 미만은 아이콘·썸네일로 간주
 
 
 # ── HTML 가져오기 ─────────────────────────────────────────────────────────────
@@ -121,39 +132,111 @@ def extract_images(html: str, base_url: str) -> list[str]:
 
 # ── 소스별 수집 ───────────────────────────────────────────────────────────────
 
-def scrape_source(name: str, url: str, limit: int = 20) -> list[str]:
+def check_file_size(url: str) -> int:
+    """HTTP HEAD로 파일 크기(bytes) 반환. 실패 시 0."""
+    try:
+        req = urllib.request.Request(url, method="HEAD", headers={"User-Agent": UA})
+        with urllib.request.urlopen(req, timeout=8) as r:
+            cl = r.headers.get("Content-Length", "0")
+            return int(cl)
+    except Exception:
+        return 0
+
+
+def is_yna_econ(url: str) -> bool:
+    """연합뉴스 URL이 경제 관련인지 확인"""
+    return any(kw in url for kw in YNA_ECON_KW)
+
+
+def filter_images(images: list[str], source_name: str, limit: int) -> list[str]:
+    """파일 크기 및 소스별 필터 적용"""
+    filtered = []
+    for url in images:
+        if len(filtered) >= limit:
+            break
+        # 연합뉴스는 경제 섹션 URL만
+        if "yna.co.kr" in url and not is_yna_econ(url):
+            continue
+        # 파일 크기 확인 (HEAD 요청)
+        size = check_file_size(url)
+        if size > 0 and size < MIN_FILE_SIZE:
+            print(f"      [skip] {size//1024}KB 미만: {url[:60]}")
+            continue
+        filtered.append(url)
+        print(f"      ✓ {size//1024 if size else '?'}KB  {url[:70]}")
+    return filtered
+
+
+def scrape_source(name: str, url: str) -> list[str]:
     print(f"  [{name}]")
     html = fetch_html(url)
     if not html:
         return []
-    images = extract_images(html, url)
-    print(f"    → {len(images)}개 발견")
-    for img in images[:2]:
-        print(f"      {img[:90]}")
-    return images[:limit]
+    candidates = extract_images(html, url)
+    print(f"    후보 {len(candidates)}개 → 필터 중...")
+    filtered = filter_images(candidates, name, PER_SOURCE)
+    print(f"    선정: {len(filtered)}개")
+    return filtered
 
 
-def collect_all(per_source: int = 20) -> dict[str, list[str]]:
+def collect_all() -> dict[str, list[str]]:
     print("\n[인포그래픽 수집 시작]")
     result: dict[str, list[str]] = {}
     for name, url in SOURCES:
-        imgs = scrape_source(name, url, per_source)
+        imgs = scrape_source(name, url)
         if imgs:
             result[name] = imgs
         time.sleep(0.8)
     total = sum(len(v) for v in result.values())
-    print(f"\n  전체 수집: {total}개")
+    print(f"\n  전체 선정: {total}개")
     return result
+
+
+# ── 콜라주 생성 ──────────────────────────────────────────────────────────────
+
+def download_image(url: str) -> Image.Image | None:
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": UA})
+        data = urllib.request.urlopen(req, timeout=15).read()
+        return Image.open(io.BytesIO(data)).convert("RGB")
+    except Exception as e:
+        print(f"    [다운로드 실패] {url[:60]}: {e}")
+        return None
+
+
+def make_collage(urls: list[str], cols: int = 2, tile_w: int = 700, tile_h: int = 500) -> bytes | None:
+    """상위 N장으로 2열 콜라주 PNG 생성, bytes 반환"""
+    imgs = []
+    for url in urls:
+        if len(imgs) >= 6:  # 최대 6장 (3행 2열)
+            break
+        img = download_image(url)
+        if img:
+            imgs.append(img)
+    if not imgs:
+        return None
+
+    rows = (len(imgs) + cols - 1) // cols
+    canvas = Image.new("RGB", (tile_w * cols, tile_h * rows), (240, 240, 240))
+    for i, img in enumerate(imgs):
+        r, c = divmod(i, cols)
+        img.thumbnail((tile_w, tile_h), Image.LANCZOS)
+        x = c * tile_w + (tile_w - img.width)  // 2
+        y = r * tile_h + (tile_h - img.height) // 2
+        canvas.paste(img, (x, y))
+
+    buf = io.BytesIO()
+    canvas.save(buf, format="PNG", optimize=True)
+    print(f"  [콜라주] {len(imgs)}장 → {buf.tell()//1024}KB")
+    return buf.getvalue()
 
 
 # ── imgbb 업로드 ──────────────────────────────────────────────────────────────
 
-def upload_imgbb(img_url: str) -> tuple[str, str] | None:
+def upload_imgbb(data: bytes) -> tuple[str, str] | None:
     if not IMGBB_API_KEY:
         return None
     try:
-        req_img = urllib.request.Request(img_url, headers={"User-Agent": UA})
-        data    = urllib.request.urlopen(req_img, timeout=15).read()
         b64     = base64.b64encode(data).decode()
         payload = urllib.parse.urlencode({"key": IMGBB_API_KEY, "image": b64}).encode()
         req     = urllib.request.Request("https://api.imgbb.com/1/upload", data=payload, method="POST")
@@ -161,7 +244,7 @@ def upload_imgbb(img_url: str) -> tuple[str, str] | None:
             res = json.loads(r.read().decode())
         direct = res["data"]["url"]
         viewer = res["data"].get("url_viewer", direct)
-        print(f"  [imgbb] {direct}")
+        print(f"  [imgbb] 업로드 완료: {direct}")
         return direct, viewer
     except Exception as e:
         print(f"  [imgbb] 실패: {e}")
@@ -271,19 +354,29 @@ def main():
     print("=" * 50)
 
     today   = datetime.now().strftime("%Y.%m.%d")
-    sources = collect_all(per_source=20)
+    sources = collect_all()
 
     if not sources:
         print("[!] 수집된 이미지 없음 — 종료"); sys.exit(1)
 
-    # 카카오톡용: 첫 번째 소스의 첫 번째 이미지를 imgbb에 업로드
-    first_img = next(iter(sources.values()))[0]
-    print(f"\n[imgbb] 카카오톡용 업로드: {first_img[:70]}")
-    imgbb = upload_imgbb(first_img)
+    # 카카오톡용: 전체 이미지 상위 6장으로 콜라주 생성
+    all_imgs = [u for imgs in sources.values() for u in imgs]
+    print(f"\n[콜라주] 상위 6장으로 2열 콜라주 생성 중...")
+    collage_bytes = make_collage(all_imgs[:6])
+
+    if collage_bytes:
+        imgbb = upload_imgbb(collage_bytes)
+    else:
+        # 콜라주 실패 시 첫 번째 이미지 단독 업로드
+        first_data = urllib.request.urlopen(
+            urllib.request.Request(all_imgs[0], headers={"User-Agent": UA}), timeout=15
+        ).read()
+        imgbb = upload_imgbb(first_data)
+
     if imgbb:
         kakao_img, kakao_viewer = imgbb
     else:
-        kakao_img = kakao_viewer = first_img
+        kakao_img = kakao_viewer = all_imgs[0]
 
     access_token = refresh_access_token()
     send_kakao(access_token, kakao_img, kakao_viewer, today)
