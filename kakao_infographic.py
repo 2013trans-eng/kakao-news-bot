@@ -142,6 +142,35 @@ def check_file_size(url: str) -> int:
         return 0
 
 
+def today_patterns() -> list[str]:
+    now = datetime.now()
+    return [
+        now.strftime("%Y%m%d"),    # 20260623
+        now.strftime("%Y/%m/%d"),  # 2026/06/23
+        now.strftime("%Y-%m-%d"),  # 2026-06-23
+        now.strftime("%Y.%m.%d"),  # 2026.06.23
+    ]
+
+
+def filter_by_today(images: list[str], html: str, patterns: list[str]) -> list[str]:
+    """당일 날짜가 URL에 포함되거나 HTML 근처(±600자)에 날짜가 있는 이미지만 반환"""
+    # 1단계: URL에 날짜 직접 포함
+    url_dated = [u for u in images if any(p in u for p in patterns)]
+    if url_dated:
+        return url_dated
+
+    # 2단계: HTML에서 날짜 텍스트 근처에 나타난 이미지
+    ctx_dated = []
+    for pat in patterns:
+        for m in re.finditer(re.escape(pat), html):
+            chunk = html[max(0, m.start()-600): m.end()+600]
+            for url in images:
+                fname = url.split("/")[-1].split("?")[0]
+                if fname and fname in chunk and url not in ctx_dated:
+                    ctx_dated.append(url)
+    return ctx_dated
+
+
 def filter_images(images: list[str], source_name: str, limit: int) -> list[str]:
     """파일 크기 필터 적용 (10KB 미만 아이콘 제외)"""
     filtered = []
@@ -157,23 +186,31 @@ def filter_images(images: list[str], source_name: str, limit: int) -> list[str]:
     return filtered
 
 
-def scrape_source(name: str, url: str) -> list[str]:
+def scrape_source(name: str, url: str, date_patterns: list[str]) -> list[str]:
     print(f"  [{name}]")
     html = fetch_html(url)
     if not html:
         return []
     candidates = extract_images(html, url)
-    print(f"    후보 {len(candidates)}개 → 필터 중...")
-    filtered = filter_images(candidates, name, PER_SOURCE)
+    print(f"    후보 {len(candidates)}개 → 날짜 필터 중...")
+    today_imgs = filter_by_today(candidates, html, date_patterns)
+    if today_imgs:
+        print(f"    오늘 날짜 이미지 {len(today_imgs)}개 → 크기 필터 중...")
+        filtered = filter_images(today_imgs, name, PER_SOURCE)
+    else:
+        print(f"    오늘 자료 없음 — 스킵")
+        filtered = []
     print(f"    선정: {len(filtered)}개")
     return filtered
 
 
 def collect_all() -> dict[str, list[str]]:
     print("\n[인포그래픽 수집 시작]")
+    date_pats = today_patterns()
+    print(f"  날짜 필터: {date_pats[0]} ({', '.join(date_pats[1:])})")
     result: dict[str, list[str]] = {}
     for name, url in SOURCES:
-        imgs = scrape_source(name, url)
+        imgs = scrape_source(name, url, date_pats)
         if imgs:
             result[name] = imgs
         time.sleep(0.8)
@@ -387,7 +424,8 @@ def main():
     sources = collect_all()
 
     if not sources:
-        print("[!] 수집된 이미지 없음 — 종료"); sys.exit(1)
+        print("[!] 오늘 날짜 인포그래픽 없음 — 종료 (새 자료가 아직 없을 수 있음)")
+        sys.exit(0)
 
     # 카카오톡용: 전체 이미지 상위 6장으로 콜라주 생성
     all_imgs = [u for imgs in sources.values() for u in imgs]
