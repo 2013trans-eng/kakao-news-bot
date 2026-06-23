@@ -21,10 +21,15 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: 패키지 설치
-        run: echo "표준 라이브러리만 사용 — 추가 패키지 없음"
+      - name: 한글 폰트 설치
+        run: |
+          sudo apt-get install -y fonts-nanum
+          fc-cache -fv
 
-      - name: 경제 인포그래픽 수집 및 전송
+      - name: 패키지 설치
+        run: pip install matplotlib yfinance
+
+      - name: 경제 인포그래픽 생성 및 전송
         id: send
         run: python kakao_infographic.py
         env:
