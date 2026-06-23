@@ -39,7 +39,6 @@ SOURCES = [
     ("기재부 인포그래픽",  "https://www.mofe.go.kr/sns/infographicList.do"),
     ("기재부 카드뉴스",    "https://www.mofe.go.kr/sns/cardNewsList.do"),
     ("KOSIS 인포그래픽",  "https://kosis.kr/visual/economyBoard/economyInfographic.do?lang=ko"),
-    ("에너지경제연구원",   "https://www.keei.re.kr/gallery.es?mid=a10206010000&bid=0001"),
 ]
 
 # 소스별 최대 수집 수
