@@ -1,5 +1,3 @@
-import base64
-import io
 import json
 import os
 import sys
@@ -11,159 +9,66 @@ from datetime import datetime
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 
-import requests
-from PIL import Image
-
 REST_API_KEY        = os.environ["KAKAO_REST_API_KEY"]
 REFRESH_TOKEN       = os.environ["KAKAO_REFRESH_TOKEN"]
 NAVER_CLIENT_ID     = os.environ["NAVER_CLIENT_ID"]
 NAVER_CLIENT_SECRET = os.environ["NAVER_CLIENT_SECRET"]
-IMGBB_API_KEY       = os.environ["IMGBB_API_KEY"]
 GMAIL_ADDRESS       = os.environ.get("GMAIL_ADDRESS", "")
 GMAIL_APP_PASSWORD  = os.environ.get("GMAIL_APP_PASSWORD", "")
 
-TOKEN_URL         = "https://kauth.kakao.com/oauth/token"
-SEND_URL          = "https://kapi.kakao.com/v2/api/talk/memo/default/send"
-NAVER_IMAGE_URL   = "https://openapi.naver.com/v1/search/image.json"
+TOKEN_URL       = "https://kauth.kakao.com/oauth/token"
+SEND_URL        = "https://kapi.kakao.com/v2/api/talk/memo/default/send"
+NAVER_IMAGE_URL = "https://openapi.naver.com/v1/search/image.json"
 
 RECIPIENTS = [GMAIL_ADDRESS, "wondertajo@gmail.com"]
 
 QUERIES = [
-    "한국 경제 인포그래픽",
-    "경제지표 그래프 2026",
-    "경제동향 인포그래픽 차트",
-    "한국은행 경제 그래프",
-    "수출 물가 경제 인포그래픽",
+    "경제 인포그래픽",
+    "경제지표 그래프",
+    "한국 경제 차트",
+    "경제동향 통계",
 ]
-
-UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-      "AppleWebKit/537.36 (KHTML, like Gecko) "
-      "Chrome/124.0.0.0 Safari/537.36")
 
 
 # ── 네이버 이미지 검색 ────────────────────────────────────────────────────────
 
-def search_naver_images(query: str, n: int = 20) -> list[dict]:
-    """네이버 이미지 검색 API로 실제 이미지 URL 반환"""
-    params = urllib.parse.urlencode({
-        "query":   query,
-        "display": n,
-        "sort":    "date",
-    })
+def search_images(query: str, n: int = 20) -> list[str]:
+    """썸네일 URL 리스트 반환 (네이버 CDN 이미지)"""
+    params = urllib.parse.urlencode({"query": query, "display": n, "sort": "date"})
     req = urllib.request.Request(f"{NAVER_IMAGE_URL}?{params}")
     req.add_header("X-Naver-Client-Id",     NAVER_CLIENT_ID)
     req.add_header("X-Naver-Client-Secret", NAVER_CLIENT_SECRET)
     try:
         with urllib.request.urlopen(req, timeout=15) as resp:
             data = json.loads(resp.read().decode())
+            print(f"  '{query}': {len(data.get('items', []))}건")
     except Exception as e:
-        print(f"  이미지 검색 오류 ({query}): {e}")
+        print(f"  '{query}' 오류: {e}")
         return []
-    results = []
+    urls = []
     for item in data.get("items", []):
-        link_url      = item.get("link",      "").strip()
-        thumbnail_url = item.get("thumbnail", "").strip()
+        thumb = item.get("thumbnail", "").strip()
         w = int(item.get("sizewidth",  0) or 0)
         h = int(item.get("sizeheight", 0) or 0)
-        # 썸네일은 네이버 CDN → 다운로드 가능, link는 이메일 표시용
-        if thumbnail_url and thumbnail_url.startswith("http") and w >= 300 and h >= 200:
-            results.append({"img_url": thumbnail_url, "src_url": link_url or thumbnail_url})
-    print(f"  API 응답: {len(data.get('items', []))}건 → 필터 후 {len(results)}건")
-    return results
+        if thumb and thumb.startswith("http") and w >= 300 and h >= 200:
+            urls.append(thumb)
+    return urls
 
 
-def is_downloadable(url: str) -> bool:
-    try:
-        req = urllib.request.Request(url, method="HEAD", headers={"User-Agent": UA})
-        with urllib.request.urlopen(req, timeout=5) as resp:
-            ct = resp.headers.get("Content-Type", "")
-            return "image" in ct
-    except Exception:
-        return True  # 확인 실패해도 일단 시도
-
-
-# ── 이미지 수집 ───────────────────────────────────────────────────────────────
-
-def collect_images(target: int = 15) -> list[dict]:
-    seen_images = set()
-    results     = []
-
-    for query in QUERIES:
+def collect(target: int = 15) -> list[str]:
+    seen    = set()
+    results = []
+    for q in QUERIES:
         if len(results) >= target:
             break
-        print(f"\n[검색] '{query}'")
-        images = search_naver_images(query, n=30)
-        print(f"  이미지 {len(images)}건 검색됨")
-
-        for img in images:
-            if len(results) >= target:
-                break
-            url = img["img_url"]
-            if url in seen_images:
-                continue
-            if not is_downloadable(url):
-                continue
-            seen_images.add(url)
-            results.append({"img_url": url})
-            print(f"  ✓ [{len(results)}] {url[:70]}")
-
+        for url in search_images(q):
+            if url not in seen:
+                seen.add(url)
+                results.append(url)
+                if len(results) >= target:
+                    break
+    print(f"  수집 완료: {len(results)}개")
     return results
-
-
-# ── 콜라주 생성 + imgbb 업로드 ────────────────────────────────────────────────
-
-def download_image(url: str) -> Image.Image | None:
-    try:
-        req = urllib.request.Request(url, headers={"User-Agent": UA})
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            return Image.open(io.BytesIO(resp.read())).convert("RGB")
-    except Exception as e:
-        print(f"    이미지 다운로드 실패: {e}")
-        return None
-
-
-def make_collage(items: list[dict], cols: int = 3) -> bytes:
-    """이미지를 격자 형태로 합쳐 PNG bytes 반환"""
-    print("\n[콜라주] 이미지 다운로드 중...")
-    cell_w, cell_h = 600, 400
-    images = []
-    for it in items:
-        img = download_image(it["img_url"])
-        if img:
-            img = img.resize((cell_w, cell_h), Image.LANCZOS)
-            images.append(img)
-            print(f"  ✓ ({len(images)}) {it['title'][:45]}")
-        if len(images) >= 12:
-            break
-
-    if not images:
-        raise RuntimeError("다운로드된 이미지 없음")
-
-    rows   = (len(images) + cols - 1) // cols
-    canvas = Image.new("RGB", (cols * cell_w, rows * cell_h), (245, 245, 245))
-    for i, img in enumerate(images):
-        x = (i % cols) * cell_w
-        y = (i // cols) * cell_h
-        canvas.paste(img, (x, y))
-
-    buf = io.BytesIO()
-    canvas.save(buf, format="JPEG", quality=88)
-    buf.seek(0)
-    print(f"  콜라주 완료: {rows}×{cols} ({len(images)}장)")
-    return buf.read()
-
-
-def upload_imgbb(image_bytes: bytes) -> str:
-    print("\n[imgbb] 업로드 중...")
-    resp = requests.post(
-        "https://api.imgbb.com/1/upload",
-        data={"key": IMGBB_API_KEY, "image": base64.b64encode(image_bytes).decode()},
-        timeout=60,
-    )
-    resp.raise_for_status()
-    url = resp.json()["data"]["url"]
-    print(f"  완료: {url}")
-    return url
 
 
 # ── 카카오 ────────────────────────────────────────────────────────────────────
@@ -190,15 +95,14 @@ def refresh_access_token() -> str:
     return result["access_token"]
 
 
-def send_kakao_collage(access_token: str, collage_url: str, today: str) -> None:
-    """콜라주 이미지를 feed 템플릿으로 전송"""
-    print("\n[카카오] 콜라주 이미지 전송 중...")
+def send_kakao(access_token: str, image_url: str, today: str) -> None:
+    print(f"\n[카카오] 전송 중...")
     template = {
         "object_type": "feed",
         "content": {
             "title":       f"📰 경제 인포그래픽 ({today})",
-            "description": "오늘의 경제 뉴스 이미지 모음",
-            "image_url":   collage_url,
+            "description": "오늘의 경제 이미지 모음 — 메일에서 전체 확인",
+            "image_url":   image_url,
             "link":        {"web_url": "https://news.naver.com/section/economy"},
         },
     }
@@ -211,30 +115,29 @@ def send_kakao_collage(access_token: str, collage_url: str, today: str) -> None:
     try:
         with urllib.request.urlopen(req) as resp:
             result = json.loads(resp.read().decode())
-            print(f"  [HTTP {resp.status}] result_code={result.get('result_code')}")
+            print(f"  result_code={result.get('result_code')}")
     except urllib.error.HTTPError as e:
         print(f"  [HTTPError {e.code}] {e.read().decode()}")
 
 
 # ── 이메일 ───────────────────────────────────────────────────────────────────
 
-def send_email(items: list[dict], today: str) -> None:
+def send_email(urls: list[str], today: str) -> None:
     if not GMAIL_ADDRESS or not GMAIL_APP_PASSWORD:
         print("[이메일] 환경변수 없음 — 건너뜀")
         return
     to_list = [r for r in RECIPIENTS if r]
     print(f"\n[이메일] 전송 중 → {', '.join(to_list)}")
 
-    imgs = ""
-    for it in items:
-        url = it.get("src_url") or it["img_url"]
-        imgs += f'<img src="{url}" style="width:100%;display:block;margin-bottom:12px;border-radius:6px">\n'
-
+    imgs = "\n".join(
+        f'<img src="{url}" style="width:100%;display:block;margin-bottom:10px;border-radius:6px">'
+        for url in urls
+    )
     html_body = f"""
     <html>
     <body style="background:#f1f3f5;margin:0;padding:24px">
       <div style="max-width:700px;margin:0 auto">
-        <h2 style="color:#1d3557;margin-bottom:20px;font-family:sans-serif">
+        <h2 style="color:#1d3557;font-family:sans-serif;margin-bottom:20px">
           📰 경제 인포그래픽 ({today})
         </h2>
         {imgs}
@@ -242,7 +145,6 @@ def send_email(items: list[dict], today: str) -> None:
     </body>
     </html>
     """
-
     msg = MIMEMultipart("alternative")
     msg["Subject"] = f"📰 경제 인포그래픽 ({today})"
     msg["From"]    = GMAIL_ADDRESS
@@ -265,20 +167,16 @@ def main():
 
     today = datetime.now().strftime("%Y.%m.%d")
 
-    items = collect_images(target=15)
-    print(f"\n총 {len(items)}개 인포그래픽 수집 완료")
+    print("\n[이미지 검색]")
+    urls = collect(target=15)
 
-    if not items:
+    if not urls:
         print("[!] 수집된 이미지 없음 — 종료")
         sys.exit(1)
 
-    # 콜라주 생성 → imgbb 업로드 → 카카오톡 전송
-    collage_bytes = make_collage(items)
-    collage_url   = upload_imgbb(collage_bytes)
-
     access_token = refresh_access_token()
-    send_kakao_collage(access_token, collage_url, today)
-    send_email(items, today)
+    send_kakao(access_token, urls[0], today)
+    send_email(urls, today)
 
     print(f"\n{'='*50}\n[+] 완료!\n{'='*50}")
 

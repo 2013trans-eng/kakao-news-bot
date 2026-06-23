@@ -22,7 +22,7 @@ jobs:
           python-version: '3.11'
 
       - name: 패키지 설치
-        run: pip install Pillow requests
+        run: echo "No extra packages needed"
 
       - name: 경제 인포그래픽 수집 및 전송
         id: send
