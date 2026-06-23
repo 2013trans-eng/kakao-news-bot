@@ -13,6 +13,7 @@ import urllib.error
 from datetime import datetime
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
+from email.mime.image import MIMEImage
 
 from PIL import Image
 
@@ -206,11 +207,11 @@ def download_image(url: str) -> Image.Image | None:
         return None
 
 
-def make_collage(urls: list[str], cols: int = 2, tile_w: int = 700, tile_h: int = 500) -> bytes | None:
-    """상위 N장으로 2열 콜라주 PNG 생성, bytes 반환"""
+def make_collage(urls: list[str], cols: int = 2, tile_w: int = 560, tile_h: int = 400) -> bytes | None:
+    """상위 N장으로 2열 콜라주 JPEG 생성, bytes 반환"""
     imgs = []
     for url in urls:
-        if len(imgs) >= 6:  # 최대 6장 (3행 2열)
+        if len(imgs) >= 6:
             break
         img = download_image(url)
         if img:
@@ -223,13 +224,13 @@ def make_collage(urls: list[str], cols: int = 2, tile_w: int = 700, tile_h: int 
     for i, img in enumerate(imgs):
         r, c = divmod(i, cols)
         img.thumbnail((tile_w, tile_h), Image.LANCZOS)
-        x = c * tile_w + (tile_w - img.width)  // 2
+        x = c * tile_w + (tile_w - img.width) // 2
         y = r * tile_h + (tile_h - img.height) // 2
         canvas.paste(img, (x, y))
 
     buf = io.BytesIO()
-    canvas.save(buf, format="PNG", optimize=True)
-    print(f"  [콜라주] {len(imgs)}장 → {buf.tell()//1024}KB")
+    canvas.save(buf, format="JPEG", quality=82, optimize=True)
+    print(f"  [콜라주] {len(imgs)}장 → {buf.tell()//1024}KB (JPEG)")
     return buf.getvalue()
 
 
@@ -256,11 +257,11 @@ def upload_imgbb(data: bytes) -> tuple[str, str] | None:
 # ── GitHub 이미지 호스팅 ──────────────────────────────────────────────────────
 
 def push_collage_to_github(data: bytes) -> str | None:
-    """GitHub Contents API로 collage.png 업로드 후 commit-SHA raw URL 반환"""
+    """GitHub Contents API로 collage.jpg 업로드 후 commit-SHA raw URL 반환"""
     if not GITHUB_REPOSITORY or not GITHUB_TOKEN:
         print("  [GitHub] GITHUB_REPOSITORY/TOKEN 없음 — 건너뜀")
         return None
-    api_url = f"https://api.github.com/repos/{GITHUB_REPOSITORY}/contents/collage.png"
+    api_url = f"https://api.github.com/repos/{GITHUB_REPOSITORY}/contents/collage.jpg"
     headers = {
         "Authorization": f"token {GITHUB_TOKEN}",
         "Accept":        "application/vnd.github.v3+json",
@@ -287,8 +288,7 @@ def push_collage_to_github(data: bytes) -> str | None:
         with urllib.request.urlopen(req, timeout=30) as r:
             result = json.loads(r.read().decode())
 
-        commit_sha = result["commit"]["sha"]
-        raw_url = f"https://raw.githubusercontent.com/{GITHUB_REPOSITORY}/{commit_sha}/collage.png"
+        raw_url = result["content"]["download_url"]
         print(f"  [GitHub] 업로드 완료: {raw_url}")
         return raw_url
     except Exception as e:
@@ -352,12 +352,41 @@ def send_email(sources: dict[str, list[str]], today: str) -> None:
     to_list = [r for r in RECIPIENTS if r]
     print(f"\n[이메일] 전송 중 → {', '.join(to_list)}")
 
+    # 이미지를 다운로드해 인라인 첨부 (CID) 방식으로 삽입 — 핫링크 차단 우회
     sections = ""
+    image_parts: list[MIMEImage] = []
+    cid_idx = 0
+
     for name, imgs in sources.items():
-        img_tags = "\n".join(
-            f'<img src="{u}" style="width:100%;display:block;margin-bottom:10px;border-radius:4px">'
-            for u in imgs
-        )
+        img_tags = ""
+        for url in imgs:
+            try:
+                req  = urllib.request.Request(url, headers={"User-Agent": UA})
+                data = urllib.request.urlopen(req, timeout=12).read()
+                # 최대 600px 너비로 리사이즈 후 JPEG 변환
+                im = Image.open(io.BytesIO(data)).convert("RGB")
+                if im.width > 600:
+                    im = im.resize((600, int(im.height * 600 / im.width)), Image.LANCZOS)
+                buf = io.BytesIO()
+                im.save(buf, format="JPEG", quality=82)
+                cid_idx += 1
+                cid = f"img{cid_idx}@kakaobot"
+                part = MIMEImage(buf.getvalue(), _subtype="jpeg")
+                part.add_header("Content-ID", f"<{cid}>")
+                part.add_header("Content-Disposition", "inline")
+                image_parts.append(part)
+                img_tags += (
+                    f'<img src="cid:{cid}" '
+                    f'style="width:100%;max-width:600px;display:block;'
+                    f'margin-bottom:10px;border-radius:4px">\n'
+                )
+            except Exception as e:
+                print(f"      [이미지 다운로드 실패] {url[:60]}: {e}")
+                img_tags += (
+                    f'<img src="{url}" '
+                    f'style="width:100%;max-width:600px;display:block;'
+                    f'margin-bottom:10px;border-radius:4px">\n'
+                )
         sections += f"""
         <h3 style="color:#1a3a5c;font-family:sans-serif;margin:24px 0 10px;
                    padding-bottom:6px;border-bottom:2px solid #dee2e6">
@@ -377,16 +406,20 @@ def send_email(sources: dict[str, list[str]], today: str) -> None:
       </div>
     </body></html>
     """
-    msg = MIMEMultipart("alternative")
+
+    msg = MIMEMultipart("related")
     msg["Subject"] = f"경제 인포그래픽 ({today})"
     msg["From"]    = GMAIL_ADDRESS
     msg["To"]      = ", ".join(to_list)
     msg.attach(MIMEText(html_body, "html", "utf-8"))
+    for part in image_parts:
+        msg.attach(part)
+
     with smtplib.SMTP("smtp.gmail.com", 587) as smtp:
         smtp.starttls()
         smtp.login(GMAIL_ADDRESS, GMAIL_APP_PASSWORD)
         smtp.sendmail(GMAIL_ADDRESS, to_list, msg.as_bytes())
-    print("  완료")
+    print(f"  완료 (인라인 이미지 {len(image_parts)}장 첨부)")
 
 
 # ── 메인 ─────────────────────────────────────────────────────────────────────
