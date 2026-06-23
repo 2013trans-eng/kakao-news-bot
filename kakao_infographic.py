@@ -49,7 +49,6 @@ def search_naver_images(query: str, n: int = 20) -> list[dict]:
         "query":   query,
         "display": n,
         "sort":    "date",
-        "filter":  "large",   # 큰 이미지만
     })
     req = urllib.request.Request(f"{NAVER_IMAGE_URL}?{params}")
     req.add_header("X-Naver-Client-Id",     NAVER_CLIENT_ID)
@@ -65,20 +64,20 @@ def search_naver_images(query: str, n: int = 20) -> list[dict]:
         img_url = item.get("link", "").strip()
         w = int(item.get("sizewidth",  0) or 0)
         h = int(item.get("sizeheight", 0) or 0)
-        # 너무 작은 이미지 제외 (최소 400px 이상)
-        if img_url and img_url.startswith("http") and w >= 400 and h >= 300:
-            results.append({"img_url": img_url, "width": w, "height": h})
+        if img_url and img_url.startswith("http") and w >= 300 and h >= 200:
+            results.append({"img_url": img_url})
+    print(f"  API 응답: {len(data.get('items', []))}건 → 필터 후 {len(results)}건")
     return results
 
 
 def is_downloadable(url: str) -> bool:
     try:
         req = urllib.request.Request(url, method="HEAD", headers={"User-Agent": UA})
-        with urllib.request.urlopen(req, timeout=8) as resp:
+        with urllib.request.urlopen(req, timeout=5) as resp:
             ct = resp.headers.get("Content-Type", "")
             return "image" in ct
     except Exception:
-        return False
+        return True  # 확인 실패해도 일단 시도
 
 
 # ── 이미지 수집 ───────────────────────────────────────────────────────────────
