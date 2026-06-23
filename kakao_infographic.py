@@ -1,8 +1,11 @@
 import base64
+import html as html_lib
 import json
 import os
+import re
 import sys
 import smtplib
+import time
 import urllib.request
 import urllib.parse
 import urllib.error
@@ -17,11 +20,13 @@ import matplotlib.font_manager as fm
 import matplotlib.patches as mpatches
 import yfinance as yf
 
-REST_API_KEY       = os.environ["KAKAO_REST_API_KEY"]
-REFRESH_TOKEN      = os.environ["KAKAO_REFRESH_TOKEN"]
-IMGBB_API_KEY      = os.environ.get("IMGBB_API_KEY", "")
-GMAIL_ADDRESS      = os.environ.get("GMAIL_ADDRESS", "")
-GMAIL_APP_PASSWORD = os.environ.get("GMAIL_APP_PASSWORD", "")
+REST_API_KEY        = os.environ["KAKAO_REST_API_KEY"]
+REFRESH_TOKEN       = os.environ["KAKAO_REFRESH_TOKEN"]
+NAVER_CLIENT_ID     = os.environ.get("NAVER_CLIENT_ID", "")
+NAVER_CLIENT_SECRET = os.environ.get("NAVER_CLIENT_SECRET", "")
+IMGBB_API_KEY       = os.environ.get("IMGBB_API_KEY", "")
+GMAIL_ADDRESS       = os.environ.get("GMAIL_ADDRESS", "")
+GMAIL_APP_PASSWORD  = os.environ.get("GMAIL_APP_PASSWORD", "")
 
 TOKEN_URL = "https://kauth.kakao.com/oauth/token"
 SEND_URL  = "https://kapi.kakao.com/v2/api/talk/memo/default/send"
@@ -166,6 +171,77 @@ def make_infographic(data: list[dict], today: str) -> str:
     return IMG_PATH
 
 
+# ── 연합뉴스 경제 그래픽 수집 ────────────────────────────────────────────────
+
+UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+NAVER_NEWS_URL = "https://openapi.naver.com/v1/search/news.json"
+
+YNA_QUERIES = [
+    "연합뉴스 경제 그래프",
+    "연합뉴스 주가 환율 현황",
+    "연합뉴스 금융 통계 그래픽",
+]
+
+
+def extract_og_image(url: str) -> str | None:
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": UA})
+        with urllib.request.urlopen(req, timeout=8) as resp:
+            chunk = resp.read(30000).decode("utf-8", errors="ignore")
+        for pat in [
+            r'<meta[^>]+property=["\']og:image["\'][^>]+content=["\'](https?://[^"\'>\s]+)',
+            r'<meta[^>]+content=["\'](https?://[^"\'>\s]+)["\'][^>]+property=["\']og:image["\']',
+        ]:
+            m = re.search(pat, chunk, re.IGNORECASE)
+            if m:
+                return html_lib.unescape(m.group(1))
+    except Exception:
+        pass
+    return None
+
+
+def fetch_yonhap_graphics(n: int = 8) -> list[str]:
+    """연합뉴스(yna.co.kr) 경제 기사에서 그래픽 이미지 수집"""
+    if not NAVER_CLIENT_ID:
+        print("  [연합뉴스] Naver 키 없음 — 건너뜀")
+        return []
+
+    seen_urls, seen_imgs, images = set(), set(), []
+
+    for query in YNA_QUERIES:
+        if len(images) >= n:
+            break
+        params = urllib.parse.urlencode({"query": query, "display": 20, "sort": "date"})
+        req = urllib.request.Request(f"{NAVER_NEWS_URL}?{params}")
+        req.add_header("X-Naver-Client-Id",     NAVER_CLIENT_ID)
+        req.add_header("X-Naver-Client-Secret", NAVER_CLIENT_SECRET)
+        try:
+            with urllib.request.urlopen(req, timeout=15) as r:
+                items = json.loads(r.read().decode()).get("items", [])
+            print(f"  '{query}' → {len(items)}건")
+        except Exception as e:
+            print(f"  '{query}' 오류: {e}")
+            continue
+
+        for item in items:
+            if len(images) >= n:
+                break
+            url = item.get("originallink") or item.get("link", "")
+            if not url or "yna.co.kr" not in url or url in seen_urls:
+                continue
+            seen_urls.add(url)
+
+            img = extract_og_image(url)
+            if img and img not in seen_imgs and "default" not in img and "logo" not in img:
+                seen_imgs.add(img)
+                images.append(img)
+                print(f"  ✓ ({len(images)}) {img[:65]}")
+            time.sleep(0.2)
+
+    print(f"  연합뉴스 그래픽 수집: {len(images)}개")
+    return images
+
+
 def upload_imgbb(path: str) -> tuple[str, str] | None:
     if not IMGBB_API_KEY:
         print("[imgbb] API 키 없음"); return None
@@ -232,19 +308,34 @@ def send_kakao(access_token: str, img_url: str, viewer_url: str, today: str) -> 
         print(f"  [HTTPError {e.code}] {e.read().decode()}")
 
 
-def send_email(img_url: str, today: str) -> None:
+def send_email(dashboard_url: str, yonhap_imgs: list[str], today: str) -> None:
     if not GMAIL_ADDRESS or not GMAIL_APP_PASSWORD:
         print("\n[이메일] 환경변수 없음 — 건너뜀"); return
     to_list = [r for r in RECIPIENTS if r]
     print(f"\n[이메일] 전송 중 → {', '.join(to_list)}")
+
+    yonhap_section = ""
+    if yonhap_imgs:
+        imgs_html = "\n".join(
+            f'<img src="{u}" style="width:100%;display:block;margin-bottom:12px;border-radius:6px">'
+            for u in yonhap_imgs
+        )
+        yonhap_section = f"""
+        <h3 style="color:#1a3a5c;font-family:sans-serif;margin:28px 0 12px">
+          연합뉴스 경제 인포그래픽
+        </h3>
+        {imgs_html}
+        """
+
     html_body = f"""
     <html><body style="background:#f4f4f4;margin:0;padding:24px">
       <div style="max-width:700px;margin:0 auto">
         <h2 style="color:#1a3a5c;font-family:sans-serif;margin-bottom:16px">
           오늘의 시장 동향 ({today})
         </h2>
-        <img src="{img_url}"
+        <img src="{dashboard_url}"
              style="width:100%;border-radius:8px;display:block;box-shadow:0 2px 8px rgba(0,0,0,0.1)">
+        {yonhap_section}
       </div>
     </body></html>
     """
@@ -277,9 +368,12 @@ def main():
         print("[!] imgbb 실패 — 종료"); sys.exit(1)
     img_url, viewer_url = imgbb
 
+    print("\n[연합뉴스 그래픽 수집]")
+    yonhap_imgs = fetch_yonhap_graphics(n=8)
+
     access_token = refresh_access_token()
     send_kakao(access_token, img_url, viewer_url, today)
-    send_email(img_url, today)
+    send_email(img_url, yonhap_imgs, today)
 
     print(f"\n{'='*50}\n[+] 완료!\n{'='*50}")
 
