@@ -192,11 +192,16 @@ def main():
     print("=" * 50)
     print(f"실행 시각: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} UTC")
     print("=" * 50)
+    print(f"IMGBB_API_KEY 설정: {'있음' if IMGBB_API_KEY else '없음'}")
+    print(f"GMAIL_ADDRESS 설정: {'있음' if GMAIL_ADDRESS else '없음'}")
 
     today = datetime.now().strftime("%Y.%m.%d")
 
     print("\n[이미지 검색]")
     urls = collect(target=12)
+    print(f"  수집된 URL 목록:")
+    for u in urls[:3]:
+        print(f"    {u}")
 
     if not urls:
         print("[!] 수집된 이미지 없음 — 종료")
@@ -205,9 +210,8 @@ def main():
     print("\n[imgbb] 카카오톡용 이미지 업로드...")
     kakao_image_url = upload_imgbb(urls[0])
     if not kakao_image_url:
-        # imgbb 실패 시 썸네일 URL 직접 사용
         kakao_image_url = urls[0]
-        print(f"  썸네일 URL 직접 사용: {kakao_image_url[:60]}...")
+        print(f"  썸네일 URL 직접 사용: {kakao_image_url[:80]}")
 
     access_token = refresh_access_token()
     send_kakao(access_token, kakao_image_url, today)
