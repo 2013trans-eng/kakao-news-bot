@@ -43,7 +43,7 @@ SOURCES = [
 ]
 
 # 소스별 최대 수집 수
-PER_SOURCE = 5
+PER_SOURCE = 20
 
 # 제외할 키워드 (로고·아이콘·버튼 등 장식 이미지)
 SKIP_KW = [
@@ -53,11 +53,8 @@ SKIP_KW = [
     "header", "footer", "prev", "next", "close", "del_", "edit_",
 ]
 
-# 연합뉴스: 경제/금융 섹션 URL 패턴만 허용
-YNA_ECON_KW = ["/economy/", "/business/", "/finance/", "/industry/", "GYH", "AKR"]
-
 IMG_EXTS = (".jpg", ".jpeg", ".png", ".gif", ".webp")
-MIN_FILE_SIZE = 50 * 1024  # 50KB 미만은 아이콘·썸네일로 간주
+MIN_FILE_SIZE = 10 * 1024  # 10KB 미만만 제외 (아이콘 수준)
 
 
 # ── HTML 가져오기 ─────────────────────────────────────────────────────────────
@@ -145,21 +142,12 @@ def check_file_size(url: str) -> int:
         return 0
 
 
-def is_yna_econ(url: str) -> bool:
-    """연합뉴스 URL이 경제 관련인지 확인"""
-    return any(kw in url for kw in YNA_ECON_KW)
-
-
 def filter_images(images: list[str], source_name: str, limit: int) -> list[str]:
-    """파일 크기 및 소스별 필터 적용"""
+    """파일 크기 필터 적용 (10KB 미만 아이콘 제외)"""
     filtered = []
     for url in images:
         if len(filtered) >= limit:
             break
-        # 연합뉴스는 경제 섹션 URL만
-        if "yna.co.kr" in url and not is_yna_econ(url):
-            continue
-        # 파일 크기 확인 (HEAD 요청)
         size = check_file_size(url)
         if size > 0 and size < MIN_FILE_SIZE:
             print(f"      [skip] {size//1024}KB 미만: {url[:60]}")
