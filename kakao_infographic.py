@@ -4,6 +4,7 @@ import io
 import json
 import os
 import re
+import subprocess
 import sys
 import smtplib
 import time
@@ -21,6 +22,8 @@ REFRESH_TOKEN       = os.environ["KAKAO_REFRESH_TOKEN"]
 IMGBB_API_KEY       = os.environ.get("IMGBB_API_KEY", "")
 GMAIL_ADDRESS       = os.environ.get("GMAIL_ADDRESS", "")
 GMAIL_APP_PASSWORD  = os.environ.get("GMAIL_APP_PASSWORD", "")
+GITHUB_REPOSITORY   = os.environ.get("GITHUB_REPOSITORY", "")
+GITHUB_TOKEN        = os.environ.get("GITHUB_TOKEN", "")
 
 TOKEN_URL = "https://kauth.kakao.com/oauth/token"
 SEND_URL  = "https://kapi.kakao.com/v2/api/talk/memo/default/send"
@@ -251,6 +254,35 @@ def upload_imgbb(data: bytes) -> tuple[str, str] | None:
         return None
 
 
+# ── GitHub 이미지 호스팅 ──────────────────────────────────────────────────────
+
+def push_collage_to_github(data: bytes) -> str | None:
+    """collage.png를 레포에 커밋·푸시 후 commit-SHA raw URL 반환 (CDN 캐시 우회)"""
+    if not GITHUB_REPOSITORY or not GITHUB_TOKEN:
+        print("  [GitHub] GITHUB_REPOSITORY/TOKEN 없음 — 건너뜀")
+        return None
+    try:
+        with open("collage.png", "wb") as f:
+            f.write(data)
+        subprocess.run(["git", "config", "user.email", "41898282+github-actions[bot]@users.noreply.github.com"], check=True)
+        subprocess.run(["git", "config", "user.name",  "github-actions[bot]"], check=True)
+        subprocess.run(["git", "add", "collage.png"], check=True)
+        staged = subprocess.run(["git", "diff", "--staged", "--quiet"])
+        if staged.returncode == 0:
+            # 변경 없으면 현재 HEAD SHA 사용
+            sha = subprocess.run(["git", "rev-parse", "HEAD"], capture_output=True, text=True, check=True).stdout.strip()
+        else:
+            subprocess.run(["git", "commit", "-m", "chore: update daily infographic collage"], check=True)
+            remote = f"https://x-access-token:{GITHUB_TOKEN}@github.com/{GITHUB_REPOSITORY}.git"
+            subprocess.run(["git", "push", remote, "HEAD:main"], check=True)
+            sha = subprocess.run(["git", "rev-parse", "HEAD"], capture_output=True, text=True, check=True).stdout.strip()
+            print(f"  [GitHub] 푸시 완료 ({sha[:7]})")
+        return f"https://raw.githubusercontent.com/{GITHUB_REPOSITORY}/{sha}/collage.png"
+    except Exception as e:
+        print(f"  [GitHub] 실패: {e}")
+        return None
+
+
 # ── 카카오 ────────────────────────────────────────────────────────────────────
 
 def refresh_access_token() -> str:
@@ -274,17 +306,15 @@ def refresh_access_token() -> str:
     return result["access_token"]
 
 
-def send_kakao(access_token: str, img_url: str, viewer_url: str, today: str) -> None:
+def send_kakao(access_token: str, img_url: str, today: str) -> None:
     print("\n[카카오] 전송 중...")
     template = {
         "object_type": "feed",
         "content": {
-            "title":       f"경제 인포그래픽 ({today})",
-            "description": "연합뉴스 · 기재부 · KOSIS · 에너지경제연구원",
-            "image_url":   img_url,
-            "link":        {"web_url": viewer_url},
+            "title":     f"경제 인포그래픽 {today}",
+            "image_url": img_url,
+            "link":      {"web_url": img_url, "mobile_web_url": img_url},
         },
-        "buttons": [{"title": "크게 보기", "link": {"web_url": viewer_url}}],
     }
     payload = urllib.parse.urlencode(
         {"template_object": json.dumps(template, ensure_ascii=False)}
@@ -364,22 +394,27 @@ def main():
     print(f"\n[콜라주] 상위 6장으로 2열 콜라주 생성 중...")
     collage_bytes = make_collage(all_imgs[:6])
 
-    if collage_bytes:
-        imgbb = upload_imgbb(collage_bytes)
-    else:
-        # 콜라주 실패 시 첫 번째 이미지 단독 업로드
-        first_data = urllib.request.urlopen(
-            urllib.request.Request(all_imgs[0], headers={"User-Agent": UA}), timeout=15
-        ).read()
-        imgbb = upload_imgbb(first_data)
+    if not collage_bytes:
+        # 콜라주 실패 시 첫 이미지 단독 사용
+        try:
+            collage_bytes = urllib.request.urlopen(
+                urllib.request.Request(all_imgs[0], headers={"User-Agent": UA}), timeout=15
+            ).read()
+        except Exception:
+            pass
 
-    if imgbb:
-        kakao_img, kakao_viewer = imgbb
-    else:
-        kakao_img = kakao_viewer = all_imgs[0]
+    # 이미지 호스팅: GitHub raw 우선, 실패 시 imgbb, 실패 시 원본 URL
+    kakao_img = None
+    if collage_bytes:
+        kakao_img = push_collage_to_github(collage_bytes)
+    if not kakao_img and collage_bytes:
+        imgbb = upload_imgbb(collage_bytes)
+        kakao_img = imgbb[0] if imgbb else None
+    if not kakao_img:
+        kakao_img = all_imgs[0]
 
     access_token = refresh_access_token()
-    send_kakao(access_token, kakao_img, kakao_viewer, today)
+    send_kakao(access_token, kakao_img, today)
     send_email(sources, today)
 
     total = sum(len(v) for v in sources.values())
