@@ -13,252 +13,162 @@ from datetime import datetime
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 
-import matplotlib
-matplotlib.use("Agg")
-import matplotlib.pyplot as plt
-import matplotlib.font_manager as fm
-import matplotlib.patches as mpatches
-import yfinance as yf
-
 REST_API_KEY        = os.environ["KAKAO_REST_API_KEY"]
 REFRESH_TOKEN       = os.environ["KAKAO_REFRESH_TOKEN"]
-NAVER_CLIENT_ID     = os.environ.get("NAVER_CLIENT_ID", "")
-NAVER_CLIENT_SECRET = os.environ.get("NAVER_CLIENT_SECRET", "")
 IMGBB_API_KEY       = os.environ.get("IMGBB_API_KEY", "")
 GMAIL_ADDRESS       = os.environ.get("GMAIL_ADDRESS", "")
 GMAIL_APP_PASSWORD  = os.environ.get("GMAIL_APP_PASSWORD", "")
 
 TOKEN_URL = "https://kauth.kakao.com/oauth/token"
 SEND_URL  = "https://kapi.kakao.com/v2/api/talk/memo/default/send"
-
 RECIPIENTS = [GMAIL_ADDRESS, "wondertajo@gmail.com"]
 
-TICKERS = [
-    ("^KS11",    "코스피",    "한국 주식시장",  "pt"),
-    ("USDKRW=X", "달러/원",  "원화 환율",      "원"),
-    ("^GSPC",    "S&P 500",  "미국 주식시장",  "pt"),
-    ("^IXIC",    "나스닥",   "미국 기술주",    "pt"),
-    ("CL=F",     "WTI 유가", "국제 원유 가격", "$/배럴"),
-    ("GC=F",     "금",       "안전자산 금값",  "$/온스"),
+UA = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/120.0.0.0 Safari/537.36"
+)
+
+SOURCES = [
+    ("연합뉴스 그래픽",   "https://www.yna.co.kr/graphic/index"),
+    ("기재부 인포그래픽",  "https://www.mofe.go.kr/sns/infographicList.do"),
+    ("기재부 카드뉴스",    "https://www.mofe.go.kr/sns/cardNewsList.do"),
+    ("KOSIS 인포그래픽",  "https://kosis.kr/visual/economyBoard/economyInfographic.do?lang=ko"),
+    ("에너지경제연구원",   "https://www.keei.re.kr/gallery.es?mid=a10206010000&bid=0001"),
 ]
 
-IMG_PATH = "/tmp/infographic.png"
+# 제외할 키워드 (로고·아이콘·버튼 등 장식 이미지)
+SKIP_KW = [
+    "icon", "logo", "btn", "arrow", "bullet", "blank", "loading", "spinner",
+    "gnb", "lnb", "bnr", "banner", "menu", "nav_", "bg_", "back_",
+    "facebook", "twitter", "youtube", "kakao", "naver", "share", "sns_",
+    "header", "footer", "prev", "next", "close", "del_", "edit_",
+]
+IMG_EXTS = (".jpg", ".jpeg", ".png", ".gif", ".webp")
 
 
-def setup_font():
-    for fp in ["/usr/share/fonts/truetype/nanum/NanumGothicBold.ttf",
-               "/usr/share/fonts/truetype/nanum/NanumGothic.ttf"]:
-        if os.path.exists(fp):
-            fm.fontManager.addfont(fp)
-            plt.rcParams["font.family"] = fm.FontProperties(fname=fp).get_name()
-            print(f"  폰트: {plt.rcParams['font.family']}")
+# ── HTML 가져오기 ─────────────────────────────────────────────────────────────
+
+def fetch_html(url: str, size: int = 600_000) -> str | None:
+    try:
+        req = urllib.request.Request(url, headers={
+            "User-Agent":      UA,
+            "Accept":          "text/html,application/xhtml+xml,*/*;q=0.8",
+            "Accept-Language": "ko-KR,ko;q=0.9,en;q=0.7",
+            "Accept-Encoding": "identity",
+        })
+        with urllib.request.urlopen(req, timeout=20) as resp:
+            raw = resp.read(size)
+            charset = "utf-8"
+            ct = resp.headers.get("Content-Type", "")
+            if "charset=" in ct:
+                charset = ct.split("charset=")[-1].strip()
+            return raw.decode(charset, errors="ignore")
+    except Exception as e:
+        print(f"    fetch 실패: {e}")
+        return None
+
+
+# ── 이미지 URL 추출 ───────────────────────────────────────────────────────────
+
+def extract_images(html: str, base_url: str) -> list[str]:
+    found = []
+    seen  = set()
+
+    def add(raw: str):
+        url = raw.strip().split(" ")[0]
+        if url.startswith("//"):
+            url = "https:" + url
+        elif url.startswith("/"):
+            parsed = urllib.parse.urlparse(base_url)
+            url = f"{parsed.scheme}://{parsed.netloc}{url}"
+        elif not url.startswith("http"):
             return
-    print("  경고: 나눔폰트 없음")
+        url = html_lib.unescape(url)
+        path = url.split("?")[0].lower()
+        if not any(path.endswith(e) for e in IMG_EXTS):
+            return
+        url_l = url.lower()
+        if any(kw in url_l for kw in SKIP_KW):
+            return
+        if url not in seen:
+            seen.add(url)
+            found.append(url)
+
+    # <img src / data-src / data-original>
+    for m in re.finditer(
+        r'<img[^>]+(?:src|data-src|data-original|data-lazy)\s*=\s*["\']([^"\'>\s]+)["\']',
+        html, re.IGNORECASE,
+    ):
+        add(m.group(1))
+
+    # JSON/JS 문자열에 포함된 이미지 경로
+    for m in re.finditer(
+        r'["\']([^"\']*\.(?:jpg|jpeg|png|gif|webp)(?:\?[^"\']*)?)["\']',
+        html, re.IGNORECASE,
+    ):
+        add(m.group(1))
+
+    # CSS background-image
+    for m in re.finditer(
+        r'background(?:-image)?\s*:\s*url\(["\']?(https?://[^"\')\s]+)["\']?\)',
+        html, re.IGNORECASE,
+    ):
+        add(m.group(1))
+
+    return found
 
 
-def fetch_market_data() -> list[dict]:
-    print("\n[시장 데이터]")
-    results = []
-    for ticker, name, desc, unit in TICKERS:
-        try:
-            closes = yf.Ticker(ticker).history(period="5d")["Close"].dropna()
-            if closes.empty:
-                print(f"  {name}: 데이터 없음")
-                continue
-            curr = float(closes.iloc[-1])
-            prev = float(closes.iloc[-2]) if len(closes) >= 2 else curr
-            pct  = (curr - prev) / prev * 100 if prev else 0.0
-            results.append({"name": name, "desc": desc, "value": curr, "pct": pct, "unit": unit})
-            print(f"  {name}: {curr:,.2f}  ({pct:+.2f}%)")
-        except Exception as e:
-            print(f"  {name} 오류: {e}")
-    return results
+# ── 소스별 수집 ───────────────────────────────────────────────────────────────
 
-
-def fmt_value(val: float, unit: str) -> str:
-    if unit == "원":
-        return f"{val:,.1f}"
-    if val >= 10000:
-        return f"{val:,.0f}"
-    if val >= 1000:
-        return f"{val:,.1f}"
-    return f"{val:,.2f}"
-
-
-def make_infographic(data: list[dict], today: str) -> str:
-    setup_font()
-    plt.rcParams.update({"axes.unicode_minus": False})
-
-    FIG_W, FIG_H = 13, 8.5
-    BG      = "#FFFFFF"
-    HEADER  = "#1a3a5c"
-    C_UP    = "#e53935"   # 빨강=상승 (한국식)
-    C_DN    = "#1565c0"   # 파랑=하락 (한국식)
-    C_FLAT  = "#757575"
-    CARD_BG = "#f8f9fa"
-    BORDER  = "#dee2e6"
-
-    fig = plt.figure(figsize=(FIG_W, FIG_H), facecolor=BG)
-
-    # ── 헤더 ─────────────────────────────────────────────────────────────────
-    header_ax = fig.add_axes([0, 0.88, 1, 0.12])
-    header_ax.set_facecolor(HEADER)
-    header_ax.set_xlim(0, 1); header_ax.set_ylim(0, 1)
-    header_ax.axis("off")
-    header_ax.text(0.03, 0.55, "오늘의 시장 동향",
-                   fontsize=22, color="white", fontweight="bold", va="center")
-    header_ax.text(0.03, 0.18, f"국내외 주요 경제지표  |  {today} 기준",
-                   fontsize=11, color="#90caf9", va="center")
-    header_ax.text(0.97, 0.55, "▲ 상승  ▼ 하락  (전일 종가 대비)",
-                   fontsize=10, color="#aed6f1", va="center", ha="right")
-
-    # ── 카드 그리드 (2행 3열) ────────────────────────────────────────────────
-    COLS, ROWS = 3, 2
-    PAD_X, PAD_Y = 0.025, 0.035
-    GAP_X, GAP_Y = 0.018, 0.025
-    W = (1 - PAD_X * 2 - GAP_X * (COLS - 1)) / COLS
-    H = (0.86 - PAD_Y * 2 - GAP_Y * (ROWS - 1)) / ROWS
-
-    for i, item in enumerate(data[:6]):
-        row = i // COLS
-        col = i % COLS
-        x = PAD_X + col * (W + GAP_X)
-        y = PAD_Y + (ROWS - 1 - row) * (H + GAP_Y)
-
-        pct    = item["pct"]
-        c_chg  = C_UP if pct > 0 else C_DN if pct < 0 else C_FLAT
-        arrow  = "▲" if pct > 0 else "▼" if pct < 0 else "─"
-        label  = "상승" if pct > 0 else "하락" if pct < 0 else "보합"
-
-        ax = fig.add_axes([x, y, W, H])
-        ax.set_facecolor(CARD_BG)
-        for sp in ax.spines.values():
-            sp.set_edgecolor(BORDER); sp.set_linewidth(1.2)
-        ax.set_xticks([]); ax.set_yticks([])
-
-        # 지표 이름 (굵게)
-        ax.text(0.5, 0.90, item["name"],
-                transform=ax.transAxes, ha="center",
-                fontsize=18, color=HEADER, fontweight="bold")
-        # 설명 (작게)
-        ax.text(0.5, 0.76, item["desc"],
-                transform=ax.transAxes, ha="center",
-                fontsize=10, color="#6c757d")
-
-        # 구분선
-        ax.plot([0.08, 0.92], [0.68, 0.68], color=BORDER, linewidth=0.8,
-                transform=ax.transAxes, clip_on=False)
-
-        # 현재 값
-        val_str = fmt_value(item["value"], item["unit"])
-        unit_label = item["unit"] if item["unit"] != "pt" else ""
-        ax.text(0.5, 0.46, f"{val_str} {unit_label}".strip(),
-                transform=ax.transAxes, ha="center",
-                fontsize=22, color="#212529", fontweight="bold")
-
-        # 등락 (화살표 + %)
-        ax.text(0.5, 0.22, f"{arrow} {abs(pct):.2f}%  {label}",
-                transform=ax.transAxes, ha="center",
-                fontsize=15, color=c_chg, fontweight="bold")
-        ax.text(0.5, 0.06, "전일 종가 대비",
-                transform=ax.transAxes, ha="center",
-                fontsize=9, color="#adb5bd")
-
-    fig.savefig(IMG_PATH, dpi=150, bbox_inches="tight",
-                facecolor=BG, edgecolor="none")
-    plt.close(fig)
-    print(f"  이미지 저장: {IMG_PATH}")
-    return IMG_PATH
-
-
-# ── 연합뉴스 경제 그래픽 수집 ────────────────────────────────────────────────
-
-UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
-NAVER_NEWS_URL = "https://openapi.naver.com/v1/search/news.json"
-
-YNA_QUERIES = [
-    "연합뉴스 경제 그래프",
-    "연합뉴스 주가 환율 현황",
-    "연합뉴스 금융 통계 그래픽",
-]
-
-
-def extract_og_image(url: str) -> str | None:
-    try:
-        req = urllib.request.Request(url, headers={"User-Agent": UA})
-        with urllib.request.urlopen(req, timeout=8) as resp:
-            chunk = resp.read(30000).decode("utf-8", errors="ignore")
-        for pat in [
-            r'<meta[^>]+property=["\']og:image["\'][^>]+content=["\'](https?://[^"\'>\s]+)',
-            r'<meta[^>]+content=["\'](https?://[^"\'>\s]+)["\'][^>]+property=["\']og:image["\']',
-        ]:
-            m = re.search(pat, chunk, re.IGNORECASE)
-            if m:
-                return html_lib.unescape(m.group(1))
-    except Exception:
-        pass
-    return None
-
-
-def fetch_yonhap_graphics(n: int = 8) -> list[str]:
-    """연합뉴스(yna.co.kr) 경제 기사에서 그래픽 이미지 수집"""
-    if not NAVER_CLIENT_ID:
-        print("  [연합뉴스] Naver 키 없음 — 건너뜀")
+def scrape_source(name: str, url: str, limit: int = 20) -> list[str]:
+    print(f"  [{name}]")
+    html = fetch_html(url)
+    if not html:
         return []
-
-    seen_urls, seen_imgs, images = set(), set(), []
-
-    for query in YNA_QUERIES:
-        if len(images) >= n:
-            break
-        params = urllib.parse.urlencode({"query": query, "display": 20, "sort": "date"})
-        req = urllib.request.Request(f"{NAVER_NEWS_URL}?{params}")
-        req.add_header("X-Naver-Client-Id",     NAVER_CLIENT_ID)
-        req.add_header("X-Naver-Client-Secret", NAVER_CLIENT_SECRET)
-        try:
-            with urllib.request.urlopen(req, timeout=15) as r:
-                items = json.loads(r.read().decode()).get("items", [])
-            print(f"  '{query}' → {len(items)}건")
-        except Exception as e:
-            print(f"  '{query}' 오류: {e}")
-            continue
-
-        for item in items:
-            if len(images) >= n:
-                break
-            url = item.get("originallink") or item.get("link", "")
-            if not url or "yna.co.kr" not in url or url in seen_urls:
-                continue
-            seen_urls.add(url)
-
-            img = extract_og_image(url)
-            if img and img not in seen_imgs and "default" not in img and "logo" not in img:
-                seen_imgs.add(img)
-                images.append(img)
-                print(f"  ✓ ({len(images)}) {img[:65]}")
-            time.sleep(0.2)
-
-    print(f"  연합뉴스 그래픽 수집: {len(images)}개")
-    return images
+    images = extract_images(html, url)
+    print(f"    → {len(images)}개 발견")
+    for img in images[:2]:
+        print(f"      {img[:90]}")
+    return images[:limit]
 
 
-def upload_imgbb(path: str) -> tuple[str, str] | None:
+def collect_all(per_source: int = 20) -> dict[str, list[str]]:
+    print("\n[인포그래픽 수집 시작]")
+    result: dict[str, list[str]] = {}
+    for name, url in SOURCES:
+        imgs = scrape_source(name, url, per_source)
+        if imgs:
+            result[name] = imgs
+        time.sleep(0.8)
+    total = sum(len(v) for v in result.values())
+    print(f"\n  전체 수집: {total}개")
+    return result
+
+
+# ── imgbb 업로드 ──────────────────────────────────────────────────────────────
+
+def upload_imgbb(img_url: str) -> tuple[str, str] | None:
     if not IMGBB_API_KEY:
-        print("[imgbb] API 키 없음"); return None
+        return None
     try:
-        with open(path, "rb") as f:
-            b64 = base64.b64encode(f.read()).decode()
+        req_img = urllib.request.Request(img_url, headers={"User-Agent": UA})
+        data    = urllib.request.urlopen(req_img, timeout=15).read()
+        b64     = base64.b64encode(data).decode()
         payload = urllib.parse.urlencode({"key": IMGBB_API_KEY, "image": b64}).encode()
-        req = urllib.request.Request("https://api.imgbb.com/1/upload", data=payload, method="POST")
+        req     = urllib.request.Request("https://api.imgbb.com/1/upload", data=payload, method="POST")
         with urllib.request.urlopen(req, timeout=30) as r:
             res = json.loads(r.read().decode())
         direct = res["data"]["url"]
         viewer = res["data"].get("url_viewer", direct)
-        print(f"[imgbb] 완료: {direct}")
+        print(f"  [imgbb] {direct}")
         return direct, viewer
     except Exception as e:
-        print(f"[imgbb] 실패: {e}"); return None
+        print(f"  [imgbb] 실패: {e}")
+        return None
 
+
+# ── 카카오 ────────────────────────────────────────────────────────────────────
 
 def refresh_access_token() -> str:
     print("\n[토큰] 갱신 중...")
@@ -286,8 +196,8 @@ def send_kakao(access_token: str, img_url: str, viewer_url: str, today: str) -> 
     template = {
         "object_type": "feed",
         "content": {
-            "title":       f"오늘의 시장 동향 ({today})",
-            "description": "코스피 · 달러/원 · S&P500 · 나스닥 · 유가 · 금",
+            "title":       f"경제 인포그래픽 ({today})",
+            "description": "연합뉴스 · 기재부 · KOSIS · 에너지경제연구원",
             "image_url":   img_url,
             "link":        {"web_url": viewer_url},
         },
@@ -302,45 +212,47 @@ def send_kakao(access_token: str, img_url: str, viewer_url: str, today: str) -> 
     try:
         with urllib.request.urlopen(req) as resp:
             result = json.loads(resp.read().decode())
-            code = result.get("result_code")
+            code   = result.get("result_code")
             print(f"  result_code={code} {'✓' if code == 0 else '✗'}")
     except urllib.error.HTTPError as e:
         print(f"  [HTTPError {e.code}] {e.read().decode()}")
 
 
-def send_email(dashboard_url: str, yonhap_imgs: list[str], today: str) -> None:
+# ── 이메일 ───────────────────────────────────────────────────────────────────
+
+def send_email(sources: dict[str, list[str]], today: str) -> None:
     if not GMAIL_ADDRESS or not GMAIL_APP_PASSWORD:
         print("\n[이메일] 환경변수 없음 — 건너뜀"); return
     to_list = [r for r in RECIPIENTS if r]
     print(f"\n[이메일] 전송 중 → {', '.join(to_list)}")
 
-    yonhap_section = ""
-    if yonhap_imgs:
-        imgs_html = "\n".join(
-            f'<img src="{u}" style="width:100%;display:block;margin-bottom:12px;border-radius:6px">'
-            for u in yonhap_imgs
+    sections = ""
+    for name, imgs in sources.items():
+        img_tags = "\n".join(
+            f'<img src="{u}" style="width:100%;display:block;margin-bottom:10px;border-radius:4px">'
+            for u in imgs
         )
-        yonhap_section = f"""
-        <h3 style="color:#1a3a5c;font-family:sans-serif;margin:28px 0 12px">
-          연합뉴스 경제 인포그래픽
+        sections += f"""
+        <h3 style="color:#1a3a5c;font-family:sans-serif;margin:24px 0 10px;
+                   padding-bottom:6px;border-bottom:2px solid #dee2e6">
+          {name}
         </h3>
-        {imgs_html}
+        {img_tags}
         """
 
     html_body = f"""
     <html><body style="background:#f4f4f4;margin:0;padding:24px">
-      <div style="max-width:700px;margin:0 auto">
-        <h2 style="color:#1a3a5c;font-family:sans-serif;margin-bottom:16px">
-          오늘의 시장 동향 ({today})
+      <div style="max-width:720px;margin:0 auto">
+        <h2 style="color:#1a3a5c;font-family:sans-serif;margin-bottom:4px">
+          경제 인포그래픽 모음
         </h2>
-        <img src="{dashboard_url}"
-             style="width:100%;border-radius:8px;display:block;box-shadow:0 2px 8px rgba(0,0,0,0.1)">
-        {yonhap_section}
+        <p style="color:#6c757d;font-family:sans-serif;margin-top:0">{today}</p>
+        {sections}
       </div>
     </body></html>
     """
     msg = MIMEMultipart("alternative")
-    msg["Subject"] = f"오늘의 시장 동향 ({today})"
+    msg["Subject"] = f"경제 인포그래픽 ({today})"
     msg["From"]    = GMAIL_ADDRESS
     msg["To"]      = ", ".join(to_list)
     msg.attach(MIMEText(html_body, "html", "utf-8"))
@@ -351,31 +263,34 @@ def send_email(dashboard_url: str, yonhap_imgs: list[str], today: str) -> None:
     print("  완료")
 
 
+# ── 메인 ─────────────────────────────────────────────────────────────────────
+
 def main():
     print("=" * 50)
     print(f"실행 시각: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} UTC")
     print("=" * 50)
 
-    today = datetime.now().strftime("%Y.%m.%d")
-    data  = fetch_market_data()
-    if not data:
-        print("[!] 시장 데이터 없음 — 종료"); sys.exit(1)
+    today   = datetime.now().strftime("%Y.%m.%d")
+    sources = collect_all(per_source=20)
 
-    img_path = make_infographic(data, today)
+    if not sources:
+        print("[!] 수집된 이미지 없음 — 종료"); sys.exit(1)
 
-    imgbb = upload_imgbb(img_path)
-    if not imgbb:
-        print("[!] imgbb 실패 — 종료"); sys.exit(1)
-    img_url, viewer_url = imgbb
-
-    print("\n[연합뉴스 그래픽 수집]")
-    yonhap_imgs = fetch_yonhap_graphics(n=8)
+    # 카카오톡용: 첫 번째 소스의 첫 번째 이미지를 imgbb에 업로드
+    first_img = next(iter(sources.values()))[0]
+    print(f"\n[imgbb] 카카오톡용 업로드: {first_img[:70]}")
+    imgbb = upload_imgbb(first_img)
+    if imgbb:
+        kakao_img, kakao_viewer = imgbb
+    else:
+        kakao_img = kakao_viewer = first_img
 
     access_token = refresh_access_token()
-    send_kakao(access_token, img_url, viewer_url, today)
-    send_email(img_url, yonhap_imgs, today)
+    send_kakao(access_token, kakao_img, kakao_viewer, today)
+    send_email(sources, today)
 
-    print(f"\n{'='*50}\n[+] 완료!\n{'='*50}")
+    total = sum(len(v) for v in sources.values())
+    print(f"\n{'='*50}\n[+] 완료! 총 {total}개 이미지 전송\n{'='*50}")
 
 
 if __name__ == "__main__":
@@ -383,6 +298,6 @@ if __name__ == "__main__":
     try:
         main()
     except Exception as e:
-        print(f"\n[FATAL ERROR] {e}")
+        print(f"\n[FATAL] {e}")
         traceback.print_exc()
         sys.exit(1)
