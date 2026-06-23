@@ -28,12 +28,12 @@ SEND_URL  = "https://kapi.kakao.com/v2/api/talk/memo/default/send"
 RECIPIENTS = [GMAIL_ADDRESS, "wondertajo@gmail.com"]
 
 TICKERS = [
-    ("^KS11",    "KOSPI",     "pt"),
-    ("USDKRW=X", "달러/원",   "원"),
-    ("^GSPC",    "S&P 500",   "pt"),
-    ("^IXIC",    "나스닥",    "pt"),
-    ("CL=F",     "WTI 유가",  "$/배럴"),
-    ("GC=F",     "금 (Gold)", "$/온스"),
+    ("^KS11",    "코스피 (한국주식)",  "pt"),
+    ("USDKRW=X", "달러/원 (환율)",     "원"),
+    ("^GSPC",    "S&P500 (미국주식)",  "pt"),
+    ("^IXIC",    "나스닥 (미국기술)",  "pt"),
+    ("CL=F",     "WTI 원유 (유가)",    "$/배럴"),
+    ("GC=F",     "금 (안전자산)",      "$/온스"),
 ]
 
 IMG_PATH = "/tmp/infographic.png"
@@ -143,10 +143,13 @@ def make_infographic(data: list[dict], today: str) -> str:
                 transform=ax.transAxes, ha="center",
                 fontsize=23, color="white", fontweight="bold")
 
-        # 등락률
-        ax.text(0.5, 0.14, f"{arrow}  {pct:+.2f}%",
+        # 등락률 + 전일대비 설명
+        ax.text(0.5, 0.20, f"{arrow}  {pct:+.2f}%",
                 transform=ax.transAxes, ha="center",
                 fontsize=18, color=color, fontweight="bold")
+        ax.text(0.5, 0.04, "전일 대비",
+                transform=ax.transAxes, ha="center",
+                fontsize=10, color="#546e7a")
 
     fig.savefig(IMG_PATH, dpi=150, bbox_inches="tight",
                 facecolor=BG_MAIN, edgecolor="none")
@@ -206,9 +209,9 @@ def send_kakao(access_token: str, image_url: str, today: str) -> None:
         "object_type": "feed",
         "content": {
             "title":       f"경제 인포그래픽 ({today})",
-            "description": "KOSPI · 달러/원 · S&P500 · 나스닥 · 유가 · 금",
+            "description": "탭하면 큰 이미지로 볼 수 있어요",
             "image_url":   image_url,
-            "link":        {"web_url": "https://finance.naver.com"},
+            "link":        {"web_url": image_url},
         },
     }
     payload = urllib.parse.urlencode(
