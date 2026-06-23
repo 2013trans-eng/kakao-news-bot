@@ -13,7 +13,6 @@ import urllib.error
 from datetime import datetime
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
-from email.mime.image import MIMEImage
 
 from PIL import Image
 
@@ -352,41 +351,12 @@ def send_email(sources: dict[str, list[str]], today: str) -> None:
     to_list = [r for r in RECIPIENTS if r]
     print(f"\n[이메일] 전송 중 → {', '.join(to_list)}")
 
-    # 이미지를 다운로드해 인라인 첨부 (CID) 방식으로 삽입 — 핫링크 차단 우회
     sections = ""
-    image_parts: list[MIMEImage] = []
-    cid_idx = 0
-
     for name, imgs in sources.items():
-        img_tags = ""
-        for url in imgs:
-            try:
-                req  = urllib.request.Request(url, headers={"User-Agent": UA})
-                data = urllib.request.urlopen(req, timeout=12).read()
-                # 최대 600px 너비로 리사이즈 후 JPEG 변환
-                im = Image.open(io.BytesIO(data)).convert("RGB")
-                if im.width > 600:
-                    im = im.resize((600, int(im.height * 600 / im.width)), Image.LANCZOS)
-                buf = io.BytesIO()
-                im.save(buf, format="JPEG", quality=82)
-                cid_idx += 1
-                cid = f"img{cid_idx}@kakaobot"
-                part = MIMEImage(buf.getvalue(), _subtype="jpeg")
-                part.add_header("Content-ID", f"<{cid}>")
-                part.add_header("Content-Disposition", "inline")
-                image_parts.append(part)
-                img_tags += (
-                    f'<img src="cid:{cid}" '
-                    f'style="width:100%;max-width:600px;display:block;'
-                    f'margin-bottom:10px;border-radius:4px">\n'
-                )
-            except Exception as e:
-                print(f"      [이미지 다운로드 실패] {url[:60]}: {e}")
-                img_tags += (
-                    f'<img src="{url}" '
-                    f'style="width:100%;max-width:600px;display:block;'
-                    f'margin-bottom:10px;border-radius:4px">\n'
-                )
+        img_tags = "\n".join(
+            f'<img src="{u}" style="width:100%;display:block;margin-bottom:10px;border-radius:4px">'
+            for u in imgs
+        )
         sections += f"""
         <h3 style="color:#1a3a5c;font-family:sans-serif;margin:24px 0 10px;
                    padding-bottom:6px;border-bottom:2px solid #dee2e6">
@@ -406,20 +376,16 @@ def send_email(sources: dict[str, list[str]], today: str) -> None:
       </div>
     </body></html>
     """
-
-    msg = MIMEMultipart("related")
+    msg = MIMEMultipart("alternative")
     msg["Subject"] = f"경제 인포그래픽 ({today})"
     msg["From"]    = GMAIL_ADDRESS
     msg["To"]      = ", ".join(to_list)
     msg.attach(MIMEText(html_body, "html", "utf-8"))
-    for part in image_parts:
-        msg.attach(part)
-
     with smtplib.SMTP("smtp.gmail.com", 587) as smtp:
         smtp.starttls()
         smtp.login(GMAIL_ADDRESS, GMAIL_APP_PASSWORD)
         smtp.sendmail(GMAIL_ADDRESS, to_list, msg.as_bytes())
-    print(f"  완료 (인라인 이미지 {len(image_parts)}장 첨부)")
+    print("  완료")
 
 
 # ── 메인 ─────────────────────────────────────────────────────────────────────
