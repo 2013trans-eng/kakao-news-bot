@@ -209,10 +209,14 @@ def collect_all() -> dict[str, list[str]]:
     date_pats = today_patterns()
     print(f"  날짜 필터: {date_pats[0]} ({', '.join(date_pats[1:])})")
     result: dict[str, list[str]] = {}
+    seen_global: set[str] = set()
     for name, url in SOURCES:
         imgs = scrape_source(name, url, date_pats)
-        if imgs:
-            result[name] = imgs
+        # 전체 소스 통합 중복 제거
+        unique = [u for u in imgs if u not in seen_global]
+        seen_global.update(unique)
+        if unique:
+            result[name] = unique
         time.sleep(0.8)
     total = sum(len(v) for v in result.values())
     print(f"\n  전체 선정: {total}개")
