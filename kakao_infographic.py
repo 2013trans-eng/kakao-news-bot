@@ -1,3 +1,4 @@
+import base64
 import json
 import os
 import sys
@@ -13,6 +14,7 @@ REST_API_KEY        = os.environ["KAKAO_REST_API_KEY"]
 REFRESH_TOKEN       = os.environ["KAKAO_REFRESH_TOKEN"]
 NAVER_CLIENT_ID     = os.environ["NAVER_CLIENT_ID"]
 NAVER_CLIENT_SECRET = os.environ["NAVER_CLIENT_SECRET"]
+IMGBB_API_KEY       = os.environ.get("IMGBB_API_KEY", "")
 GMAIL_ADDRESS       = os.environ.get("GMAIL_ADDRESS", "")
 GMAIL_APP_PASSWORD  = os.environ.get("GMAIL_APP_PASSWORD", "")
 
@@ -23,17 +25,17 @@ NAVER_IMAGE_URL = "https://openapi.naver.com/v1/search/image.json"
 RECIPIENTS = [GMAIL_ADDRESS, "wondertajo@gmail.com"]
 
 QUERIES = [
-    "경제 인포그래픽",
-    "경제지표 그래프",
-    "한국 경제 차트",
-    "경제동향 통계",
+    "한국 경제 인포그래픽",
+    "GDP 물가 환율 인포그래픽",
+    "코스피 경제지표 그래프",
+    "한국경제 주간동향 차트",
 ]
 
 
 # ── 네이버 이미지 검색 ────────────────────────────────────────────────────────
 
 def search_images(query: str, n: int = 20) -> list[str]:
-    """썸네일 URL 리스트 반환 (네이버 CDN 이미지)"""
+    """Naver CDN 썸네일 URL 리스트 반환"""
     params = urllib.parse.urlencode({"query": query, "display": n, "sort": "date"})
     req = urllib.request.Request(f"{NAVER_IMAGE_URL}?{params}")
     req.add_header("X-Naver-Client-Id",     NAVER_CLIENT_ID)
@@ -50,12 +52,12 @@ def search_images(query: str, n: int = 20) -> list[str]:
         thumb = item.get("thumbnail", "").strip()
         w = int(item.get("sizewidth",  0) or 0)
         h = int(item.get("sizeheight", 0) or 0)
-        if thumb and thumb.startswith("http") and w >= 300 and h >= 200:
+        if thumb and thumb.startswith("https://ssl.pstatic.net") and w >= 400 and h >= 300:
             urls.append(thumb)
     return urls
 
 
-def collect(target: int = 15) -> list[str]:
+def collect(target: int = 12) -> list[str]:
     seen    = set()
     results = []
     for q in QUERIES:
@@ -69,6 +71,28 @@ def collect(target: int = 15) -> list[str]:
                     break
     print(f"  수집 완료: {len(results)}개")
     return results
+
+
+# ── imgbb 업로드 (카카오톡용) ─────────────────────────────────────────────────
+
+def upload_imgbb(thumb_url: str) -> str | None:
+    """썸네일을 imgbb에 재업로드 → 카카오 서버가 읽을 수 있는 URL 반환"""
+    if not IMGBB_API_KEY:
+        print("  [imgbb] API 키 없음 — 건너뜀")
+        return None
+    try:
+        img_bytes = urllib.request.urlopen(thumb_url, timeout=10).read()
+        b64 = base64.b64encode(img_bytes).decode()
+        payload = urllib.parse.urlencode({"key": IMGBB_API_KEY, "image": b64}).encode()
+        req = urllib.request.Request("https://api.imgbb.com/1/upload", data=payload, method="POST")
+        with urllib.request.urlopen(req, timeout=20) as r:
+            result = json.loads(r.read().decode())
+        url = result["data"]["url"]
+        print(f"  [imgbb] 업로드 완료: {url[:60]}...")
+        return url
+    except Exception as e:
+        print(f"  [imgbb] 업로드 실패: {e}")
+        return None
 
 
 # ── 카카오 ────────────────────────────────────────────────────────────────────
@@ -96,12 +120,12 @@ def refresh_access_token() -> str:
 
 
 def send_kakao(access_token: str, image_url: str, today: str) -> None:
-    print(f"\n[카카오] 전송 중...")
+    print(f"\n[카카오] 전송 중... image_url={image_url[:60]}...")
     template = {
         "object_type": "feed",
         "content": {
-            "title":       f"📰 경제 인포그래픽 ({today})",
-            "description": "오늘의 경제 이미지 모음 — 메일에서 전체 확인",
+            "title":       f"📊 오늘의 경제 인포그래픽 ({today})",
+            "description": "경제 차트·그래프 모음 — 전체 이미지는 메일 확인",
             "image_url":   image_url,
             "link":        {"web_url": "https://news.naver.com/section/economy"},
         },
@@ -129,24 +153,28 @@ def send_email(urls: list[str], today: str) -> None:
     to_list = [r for r in RECIPIENTS if r]
     print(f"\n[이메일] 전송 중 → {', '.join(to_list)}")
 
-    imgs = "\n".join(
-        f'<img src="{url}" style="width:100%;display:block;margin-bottom:10px;border-radius:6px">'
-        for url in urls
+    # 2열 그리드: 이미지를 자연 크기(최대 320px)로 표시
+    cells = "".join(
+        f'<td style="padding:6px;vertical-align:top">'
+        f'<img src="{url}" style="max-width:320px;width:100%;border-radius:6px;display:block">'
+        f'</td>'
+        + ('<tr>' if (i + 1) % 2 == 0 else '')
+        for i, url in enumerate(urls)
     )
     html_body = f"""
-    <html>
-    <body style="background:#f1f3f5;margin:0;padding:24px">
+    <html><body style="background:#f1f3f5;margin:0;padding:24px">
       <div style="max-width:700px;margin:0 auto">
         <h2 style="color:#1d3557;font-family:sans-serif;margin-bottom:20px">
-          📰 경제 인포그래픽 ({today})
+          📊 경제 인포그래픽 ({today})
         </h2>
-        {imgs}
+        <table cellspacing="0" cellpadding="0" style="width:100%">
+          <tr>{cells}</tr>
+        </table>
       </div>
-    </body>
-    </html>
+    </body></html>
     """
     msg = MIMEMultipart("alternative")
-    msg["Subject"] = f"📰 경제 인포그래픽 ({today})"
+    msg["Subject"] = f"📊 경제 인포그래픽 ({today})"
     msg["From"]    = GMAIL_ADDRESS
     msg["To"]      = ", ".join(to_list)
     msg.attach(MIMEText(html_body, "html", "utf-8"))
@@ -168,14 +196,21 @@ def main():
     today = datetime.now().strftime("%Y.%m.%d")
 
     print("\n[이미지 검색]")
-    urls = collect(target=15)
+    urls = collect(target=12)
 
     if not urls:
         print("[!] 수집된 이미지 없음 — 종료")
         sys.exit(1)
 
+    print("\n[imgbb] 카카오톡용 이미지 업로드...")
+    kakao_image_url = upload_imgbb(urls[0])
+    if not kakao_image_url:
+        # imgbb 실패 시 썸네일 URL 직접 사용
+        kakao_image_url = urls[0]
+        print(f"  썸네일 URL 직접 사용: {kakao_image_url[:60]}...")
+
     access_token = refresh_access_token()
-    send_kakao(access_token, urls[0], today)
+    send_kakao(access_token, kakao_image_url, today)
     send_email(urls, today)
 
     print(f"\n{'='*50}\n[+] 완료!\n{'='*50}")
