@@ -1,8 +1,11 @@
 import base64
+import html as html_lib
 import json
 import os
+import re
 import sys
 import smtplib
+import time
 import urllib.request
 import urllib.parse
 import urllib.error
@@ -10,165 +13,113 @@ from datetime import datetime
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 
-import matplotlib
-matplotlib.use("Agg")
-import matplotlib.pyplot as plt
-import matplotlib.font_manager as fm
-import yfinance as yf
+REST_API_KEY        = os.environ["KAKAO_REST_API_KEY"]
+REFRESH_TOKEN       = os.environ["KAKAO_REFRESH_TOKEN"]
+NAVER_CLIENT_ID     = os.environ["NAVER_CLIENT_ID"]
+NAVER_CLIENT_SECRET = os.environ["NAVER_CLIENT_SECRET"]
+IMGBB_API_KEY       = os.environ.get("IMGBB_API_KEY", "")
+GMAIL_ADDRESS       = os.environ.get("GMAIL_ADDRESS", "")
+GMAIL_APP_PASSWORD  = os.environ.get("GMAIL_APP_PASSWORD", "")
 
-REST_API_KEY       = os.environ["KAKAO_REST_API_KEY"]
-REFRESH_TOKEN      = os.environ["KAKAO_REFRESH_TOKEN"]
-IMGBB_API_KEY      = os.environ.get("IMGBB_API_KEY", "")
-GMAIL_ADDRESS      = os.environ.get("GMAIL_ADDRESS", "")
-GMAIL_APP_PASSWORD = os.environ.get("GMAIL_APP_PASSWORD", "")
-
-TOKEN_URL = "https://kauth.kakao.com/oauth/token"
-SEND_URL  = "https://kapi.kakao.com/v2/api/talk/memo/default/send"
+TOKEN_URL      = "https://kauth.kakao.com/oauth/token"
+SEND_URL       = "https://kapi.kakao.com/v2/api/talk/memo/default/send"
+NAVER_NEWS_URL = "https://openapi.naver.com/v1/search/news.json"
 
 RECIPIENTS = [GMAIL_ADDRESS, "wondertajo@gmail.com"]
 
-TICKERS = [
-    ("^KS11",    "코스피 (한국주식)",  "pt"),
-    ("USDKRW=X", "달러/원 (환율)",     "원"),
-    ("^GSPC",    "S&P500 (미국주식)",  "pt"),
-    ("^IXIC",    "나스닥 (미국기술)",  "pt"),
-    ("CL=F",     "WTI 원유 (유가)",    "$/배럴"),
-    ("GC=F",     "금 (안전자산)",      "$/온스"),
+QUERIES = [
+    "경제 인포그래픽",
+    "코스피 환율 금리 그래프",
+    "경제지표 현황 차트",
+    "한국 경제 동향 그래프",
 ]
 
-IMG_PATH = "/tmp/infographic.png"
+UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
 
 
-# ── 폰트 설정 ─────────────────────────────────────────────────────────────────
+# ── og:image 추출 ─────────────────────────────────────────────────────────────
 
-def setup_font():
-    candidates = [
-        "/usr/share/fonts/truetype/nanum/NanumGothicBold.ttf",
-        "/usr/share/fonts/truetype/nanum/NanumGothic.ttf",
-    ]
-    for fp in candidates:
-        if os.path.exists(fp):
-            fm.fontManager.addfont(fp)
-            name = fm.FontProperties(fname=fp).get_name()
-            plt.rcParams["font.family"] = name
-            print(f"  폰트 적용: {name}")
-            return
-    print("  경고: 나눔폰트 없음 — 기본 폰트 사용")
+def extract_og_image(url: str) -> str | None:
+    """기사 URL에서 og:image 메타 태그 추출 (앞 30KB만 읽음)"""
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": UA})
+        with urllib.request.urlopen(req, timeout=8) as resp:
+            chunk = resp.read(30000).decode("utf-8", errors="ignore")
+        for pat in [
+            r'<meta[^>]+property=["\']og:image["\'][^>]+content=["\'](https?://[^"\'>\s]+)',
+            r'<meta[^>]+content=["\'](https?://[^"\'>\s]+)["\'][^>]+property=["\']og:image["\']',
+        ]:
+            m = re.search(pat, chunk, re.IGNORECASE)
+            if m:
+                return html_lib.unescape(m.group(1))
+    except Exception:
+        pass
+    return None
 
 
-# ── 시장 데이터 ───────────────────────────────────────────────────────────────
+# ── 뉴스 검색 + 이미지 수집 ───────────────────────────────────────────────────
 
-def fetch_market_data() -> list[dict]:
-    print("\n[시장 데이터 수집]")
-    results = []
-    for ticker, label, unit in TICKERS:
-        try:
-            hist   = yf.Ticker(ticker).history(period="5d")
-            closes = hist["Close"].dropna()
-            if closes.empty:
-                print(f"  {label}: 데이터 없음")
+def search_news(query: str, n: int = 10) -> list[str]:
+    """네이버 뉴스 검색 → 기사 URL 목록"""
+    params = urllib.parse.urlencode({"query": query, "display": n, "sort": "date"})
+    req = urllib.request.Request(f"{NAVER_NEWS_URL}?{params}")
+    req.add_header("X-Naver-Client-Id",     NAVER_CLIENT_ID)
+    req.add_header("X-Naver-Client-Secret", NAVER_CLIENT_SECRET)
+    try:
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            data = json.loads(resp.read().decode())
+        urls = [it.get("link", "") for it in data.get("items", []) if it.get("link")]
+        print(f"  '{query}' → {len(urls)}건")
+        return urls
+    except Exception as e:
+        print(f"  '{query}' 오류: {e}")
+        return []
+
+
+def collect_images(target: int = 10) -> list[str]:
+    print("\n[인포그래픽 수집]")
+    seen_urls  = set()
+    seen_imgs  = set()
+    images     = []
+
+    for query in QUERIES:
+        if len(images) >= target:
+            break
+        for article_url in search_news(query):
+            if article_url in seen_urls:
                 continue
-            curr = float(closes.iloc[-1])
-            prev = float(closes.iloc[-2]) if len(closes) >= 2 else curr
-            pct  = (curr - prev) / prev * 100 if prev else 0.0
-            results.append({"label": label, "value": curr, "pct": pct, "unit": unit})
-            print(f"  {label}: {curr:,.2f}  ({pct:+.2f}%)")
-        except Exception as e:
-            print(f"  {label} 오류: {e}")
-    return results
+            seen_urls.add(article_url)
 
+            img = extract_og_image(article_url)
+            if img and img not in seen_imgs:
+                # 너무 작거나 기본 이미지로 보이는 것 제외
+                if any(skip in img for skip in ["default", "logo", "icon", "blank"]):
+                    continue
+                seen_imgs.add(img)
+                images.append(img)
+                print(f"  ✓ ({len(images)}) {img[:70]}")
+                if len(images) >= target:
+                    break
 
-# ── 인포그래픽 생성 ───────────────────────────────────────────────────────────
+            time.sleep(0.2)  # 요청 간격
 
-def make_infographic(data: list[dict], today: str) -> str:
-    setup_font()
-
-    BG_MAIN  = "#0d1b2a"
-    BG_UP    = "#0a2e1a"
-    BG_DN    = "#2e0a0a"
-    BG_FLAT  = "#1a2233"
-    C_UP     = "#00e676"
-    C_DN     = "#ff5252"
-    C_FLAT   = "#78909c"
-    C_LABEL  = "#90caf9"
-    C_BORDER = "#1e3a5f"
-
-    fig = plt.figure(figsize=(14, 9), facecolor=BG_MAIN)
-    fig.text(0.5, 0.96,
-             f"경제 인포그래픽  |  {today}",
-             ha="center", va="top",
-             fontsize=26, color="white", fontweight="bold")
-
-    COLS, ROWS = 3, 2
-    PX, PY = 0.04, 0.05
-    GAP = 0.018
-    W = (1 - PX * 2 - GAP * (COLS - 1)) / COLS
-    H = (0.88 - PY * 2 - GAP * (ROWS - 1)) / ROWS
-
-    for i, item in enumerate(data[:6]):
-        row = i // COLS
-        col = i % COLS
-        x = PX + col * (W + GAP)
-        y = PY + (ROWS - 1 - row) * (H + GAP)
-
-        pct   = item["pct"]
-        bg    = BG_UP if pct > 0 else BG_DN if pct < 0 else BG_FLAT
-        arrow = "▲" if pct > 0 else "▼" if pct < 0 else "─"
-        color = C_UP  if pct > 0 else C_DN  if pct < 0 else C_FLAT
-
-        ax = fig.add_axes([x, y, W, H])
-        ax.set_facecolor(bg)
-        for spine in ax.spines.values():
-            spine.set_edgecolor(C_BORDER)
-            spine.set_linewidth(1.5)
-        ax.set_xticks([])
-        ax.set_yticks([])
-
-        # 지표 이름
-        ax.text(0.5, 0.84, item["label"],
-                transform=ax.transAxes, ha="center",
-                fontsize=17, color=C_LABEL, fontweight="bold")
-
-        # 현재 값
-        val = item["value"]
-        if item["unit"] == "원":
-            val_str = f"{val:,.1f} 원"
-        elif val >= 10000:
-            val_str = f"{val:,.0f}"
-        elif val >= 1000:
-            val_str = f"{val:,.1f}"
-        else:
-            val_str = f"{val:,.2f}"
-        ax.text(0.5, 0.48, val_str,
-                transform=ax.transAxes, ha="center",
-                fontsize=23, color="white", fontweight="bold")
-
-        # 등락률 + 전일대비 설명
-        ax.text(0.5, 0.20, f"{arrow}  {pct:+.2f}%",
-                transform=ax.transAxes, ha="center",
-                fontsize=18, color=color, fontweight="bold")
-        ax.text(0.5, 0.04, "전일 대비",
-                transform=ax.transAxes, ha="center",
-                fontsize=10, color="#546e7a")
-
-    fig.savefig(IMG_PATH, dpi=150, bbox_inches="tight",
-                facecolor=BG_MAIN, edgecolor="none")
-    plt.close(fig)
-    print(f"\n  이미지 저장: {IMG_PATH}")
-    return IMG_PATH
+    print(f"  수집 완료: {len(images)}개")
+    return images
 
 
 # ── imgbb 업로드 ──────────────────────────────────────────────────────────────
 
-def upload_imgbb(path: str) -> str | None:
+def upload_imgbb(img_url: str) -> str | None:
     if not IMGBB_API_KEY:
         print("[imgbb] API 키 없음")
         return None
-    with open(path, "rb") as f:
-        b64 = base64.b64encode(f.read()).decode()
-    payload = urllib.parse.urlencode({"key": IMGBB_API_KEY, "image": b64}).encode()
-    req = urllib.request.Request("https://api.imgbb.com/1/upload", data=payload, method="POST")
     try:
+        data = urllib.request.urlopen(
+            urllib.request.Request(img_url, headers={"User-Agent": UA}), timeout=15
+        ).read()
+        b64     = base64.b64encode(data).decode()
+        payload = urllib.parse.urlencode({"key": IMGBB_API_KEY, "image": b64}).encode()
+        req     = urllib.request.Request("https://api.imgbb.com/1/upload", data=payload, method="POST")
         with urllib.request.urlopen(req, timeout=30) as r:
             result = json.loads(r.read().decode())
         url = result["data"]["url"]
@@ -209,7 +160,7 @@ def send_kakao(access_token: str, image_url: str, today: str) -> None:
         "object_type": "feed",
         "content": {
             "title":       f"경제 인포그래픽 ({today})",
-            "description": "탭하면 큰 이미지로 볼 수 있어요",
+            "description": "탭하면 큰 이미지로 볼 수 있어요 — 전체 이미지는 메일 확인",
             "image_url":   image_url,
             "link":        {"web_url": image_url},
         },
@@ -223,7 +174,7 @@ def send_kakao(access_token: str, image_url: str, today: str) -> None:
     try:
         with urllib.request.urlopen(req) as resp:
             result = json.loads(resp.read().decode())
-            code = result.get("result_code")
+            code   = result.get("result_code")
             print(f"  result_code={code} {'✓' if code == 0 else '✗'}")
     except urllib.error.HTTPError as e:
         print(f"  [HTTPError {e.code}] {e.read().decode()}")
@@ -231,21 +182,24 @@ def send_kakao(access_token: str, image_url: str, today: str) -> None:
 
 # ── 이메일 ───────────────────────────────────────────────────────────────────
 
-def send_email(image_url: str, today: str) -> None:
+def send_email(images: list[str], today: str) -> None:
     if not GMAIL_ADDRESS or not GMAIL_APP_PASSWORD:
         print("\n[이메일] 환경변수 없음 — 건너뜀")
         return
     to_list = [r for r in RECIPIENTS if r]
     print(f"\n[이메일] 전송 중 → {', '.join(to_list)}")
 
+    imgs_html = "\n".join(
+        f'<img src="{u}" style="width:100%;display:block;margin-bottom:12px;border-radius:6px">'
+        for u in images
+    )
     html_body = f"""
-    <html><body style="background:#0d1b2a;margin:0;padding:24px">
+    <html><body style="background:#f4f4f4;margin:0;padding:24px">
       <div style="max-width:700px;margin:0 auto">
-        <h2 style="color:#90caf9;font-family:sans-serif;margin-bottom:16px">
+        <h2 style="color:#1d3557;font-family:sans-serif;margin-bottom:20px">
           경제 인포그래픽 ({today})
         </h2>
-        <img src="{image_url}"
-             style="width:100%;border-radius:8px;display:block">
+        {imgs_html}
       </div>
     </body></html>
     """
@@ -269,23 +223,22 @@ def main():
     print(f"실행 시각: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} UTC")
     print("=" * 50)
 
-    today = datetime.now().strftime("%Y.%m.%d")
+    today  = datetime.now().strftime("%Y.%m.%d")
+    images = collect_images(target=10)
 
-    data = fetch_market_data()
-    if not data:
-        print("[!] 시장 데이터 없음 — 종료")
+    if not images:
+        print("[!] 수집된 이미지 없음 — 종료")
         sys.exit(1)
 
-    img_path = make_infographic(data, today)
-
-    image_url = upload_imgbb(img_path)
-    if not image_url:
-        print("[!] imgbb 업로드 실패 — 종료")
-        sys.exit(1)
+    print(f"\n[imgbb] 카카오톡용 업로드 중...")
+    kakao_img = upload_imgbb(images[0])
+    if not kakao_img:
+        kakao_img = images[0]
+        print(f"  원본 URL 직접 사용")
 
     access_token = refresh_access_token()
-    send_kakao(access_token, image_url, today)
-    send_email(image_url, today)
+    send_kakao(access_token, kakao_img, today)
+    send_email(images, today)
 
     print(f"\n{'='*50}\n[+] 완료!\n{'='*50}")
 
