@@ -51,6 +51,7 @@ SKIP_KW = [
     "gnb", "lnb", "bnr", "banner", "menu", "nav_", "bg_", "back_",
     "facebook", "twitter", "youtube", "kakao", "naver", "share", "sns_",
     "header", "footer", "prev", "next", "close", "del_", "edit_",
+    "mark", "symbol", "emblem", "_ci", "stamp", "seal", "trademark",
 ]
 
 IMG_EXTS = (".jpg", ".jpeg", ".png", ".gif", ".webp")
