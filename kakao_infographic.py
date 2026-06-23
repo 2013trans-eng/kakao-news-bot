@@ -4,7 +4,6 @@ import io
 import json
 import os
 import re
-import subprocess
 import sys
 import smtplib
 import time
@@ -257,27 +256,41 @@ def upload_imgbb(data: bytes) -> tuple[str, str] | None:
 # ── GitHub 이미지 호스팅 ──────────────────────────────────────────────────────
 
 def push_collage_to_github(data: bytes) -> str | None:
-    """collage.png를 레포에 커밋·푸시 후 commit-SHA raw URL 반환 (CDN 캐시 우회)"""
+    """GitHub Contents API로 collage.png 업로드 후 commit-SHA raw URL 반환"""
     if not GITHUB_REPOSITORY or not GITHUB_TOKEN:
         print("  [GitHub] GITHUB_REPOSITORY/TOKEN 없음 — 건너뜀")
         return None
+    api_url = f"https://api.github.com/repos/{GITHUB_REPOSITORY}/contents/collage.png"
+    headers = {
+        "Authorization": f"token {GITHUB_TOKEN}",
+        "Accept":        "application/vnd.github.v3+json",
+        "Content-Type":  "application/json",
+    }
     try:
-        with open("collage.png", "wb") as f:
-            f.write(data)
-        subprocess.run(["git", "config", "user.email", "41898282+github-actions[bot]@users.noreply.github.com"], check=True)
-        subprocess.run(["git", "config", "user.name",  "github-actions[bot]"], check=True)
-        subprocess.run(["git", "add", "collage.png"], check=True)
-        staged = subprocess.run(["git", "diff", "--staged", "--quiet"])
-        if staged.returncode == 0:
-            # 변경 없으면 현재 HEAD SHA 사용
-            sha = subprocess.run(["git", "rev-parse", "HEAD"], capture_output=True, text=True, check=True).stdout.strip()
-        else:
-            subprocess.run(["git", "commit", "-m", "chore: update daily infographic collage"], check=True)
-            remote = f"https://x-access-token:{GITHUB_TOKEN}@github.com/{GITHUB_REPOSITORY}.git"
-            subprocess.run(["git", "push", remote, "HEAD:main"], check=True)
-            sha = subprocess.run(["git", "rev-parse", "HEAD"], capture_output=True, text=True, check=True).stdout.strip()
-            print(f"  [GitHub] 푸시 완료 ({sha[:7]})")
-        return f"https://raw.githubusercontent.com/{GITHUB_REPOSITORY}/{sha}/collage.png"
+        # 기존 파일 SHA 조회 (업데이트 시 필요)
+        existing_sha = None
+        try:
+            req = urllib.request.Request(api_url, headers=headers)
+            with urllib.request.urlopen(req, timeout=10) as r:
+                existing_sha = json.loads(r.read().decode()).get("sha")
+        except Exception:
+            pass
+
+        body: dict = {
+            "message": "chore: update daily infographic collage",
+            "content": base64.b64encode(data).decode(),
+        }
+        if existing_sha:
+            body["sha"] = existing_sha
+
+        req = urllib.request.Request(api_url, data=json.dumps(body).encode(), method="PUT", headers=headers)
+        with urllib.request.urlopen(req, timeout=30) as r:
+            result = json.loads(r.read().decode())
+
+        commit_sha = result["commit"]["sha"]
+        raw_url = f"https://raw.githubusercontent.com/{GITHUB_REPOSITORY}/{commit_sha}/collage.png"
+        print(f"  [GitHub] 업로드 완료: {raw_url}")
+        return raw_url
     except Exception as e:
         print(f"  [GitHub] 실패: {e}")
         return None
