@@ -61,11 +61,13 @@ def search_naver_images(query: str, n: int = 20) -> list[dict]:
         return []
     results = []
     for item in data.get("items", []):
-        img_url = item.get("link", "").strip()
+        link_url      = item.get("link",      "").strip()
+        thumbnail_url = item.get("thumbnail", "").strip()
         w = int(item.get("sizewidth",  0) or 0)
         h = int(item.get("sizeheight", 0) or 0)
-        if img_url and img_url.startswith("http") and w >= 300 and h >= 200:
-            results.append({"img_url": img_url})
+        # 썸네일은 네이버 CDN → 다운로드 가능, link는 이메일 표시용
+        if thumbnail_url and thumbnail_url.startswith("http") and w >= 300 and h >= 200:
+            results.append({"img_url": thumbnail_url, "src_url": link_url or thumbnail_url})
     print(f"  API 응답: {len(data.get('items', []))}건 → 필터 후 {len(results)}건")
     return results
 
@@ -225,7 +227,8 @@ def send_email(items: list[dict], today: str) -> None:
 
     imgs = ""
     for it in items:
-        imgs += f'<img src="{it["img_url"]}" style="width:100%;display:block;margin-bottom:12px;border-radius:6px">\n'
+        url = it.get("src_url") or it["img_url"]
+        imgs += f'<img src="{url}" style="width:100%;display:block;margin-bottom:12px;border-radius:6px">\n'
 
     html_body = f"""
     <html>
