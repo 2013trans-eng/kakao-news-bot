@@ -32,11 +32,15 @@ NAVER_SEARCH_URL = "https://openapi.naver.com/v1/search/news.json"
 RECIPIENTS = [GMAIL_ADDRESS, "wondertajo@gmail.com"]
 
 QUERIES = [
-    "경제 인포그래픽",
-    "경제지표 그래프 동향",
-    "주간 경제동향 분석",
-    "경제 현황 차트",
+    "경제 인포그래픽 그래프",
+    "경제지표 차트 통계",
+    "주요 경제지표 그래프",
+    "경제 통계 인포그래픽",
+    "경제동향 차트 분석",
 ]
+
+# 인포그래픽 아닌 일반 기사 사진 필터
+NOISE_TITLE_KW = ["기자", "대통령", "장관", "회의", "현장", "방문", "사진"]
 
 UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
       "AppleWebKit/537.36 (KHTML, like Gecko) "
@@ -104,13 +108,13 @@ def get_og_image(url: str) -> str | None:
 
 
 def is_valid_image(url: str) -> bool:
-    """이미지 URL이 실제 이미지인지 헤더로 확인 (최소 10KB)"""
+    """실제 이미지이고 최소 30KB 이상인지 확인 (작은 아이콘/썸네일 제외)"""
     try:
         req = urllib.request.Request(url, method="HEAD", headers={"User-Agent": UA})
         with urllib.request.urlopen(req, timeout=8) as resp:
             ct  = resp.headers.get("Content-Type", "")
             cl  = int(resp.headers.get("Content-Length", 0))
-            return "image" in ct and cl > 10_000
+            return "image" in ct and cl > 30_000
     except Exception:
         return False
 
@@ -135,6 +139,11 @@ def collect_images(target: int = 15) -> list[dict]:
             if art["link"] in seen_links:
                 continue
             seen_links.add(art["link"])
+
+            # 일반 기사 사진 제목 필터
+            if any(kw in art["title"] for kw in NOISE_TITLE_KW):
+                print(f"  ✗ 노이즈 제목: {art['title'][:40]}")
+                continue
 
             img_url = get_og_image(art["link"])
             if not img_url or img_url in seen_images:
@@ -240,17 +249,11 @@ def send_kakao_collage(access_token: str, collage_url: str, today: str) -> None:
     template = {
         "object_type": "feed",
         "content": {
-            "title":        f"📰 경제 인포그래픽 ({today})",
-            "description":  "오늘의 경제 뉴스 이미지 모음",
-            "image_url":    collage_url,
-            "image_width":  1800,
-            "image_height": 1200,
-            "link": {"web_url": "https://news.naver.com/section/economy"},
+            "title":       f"📰 경제 인포그래픽 ({today})",
+            "description": "오늘의 경제 뉴스 이미지 모음",
+            "image_url":   collage_url,
+            "link":        {"web_url": "https://news.naver.com/section/economy"},
         },
-        "buttons": [{
-            "title": "경제 뉴스 더보기",
-            "link":  {"web_url": "https://news.naver.com/section/economy"},
-        }],
     }
     payload = urllib.parse.urlencode(
         {"template_object": json.dumps(template, ensure_ascii=False)}
@@ -275,44 +278,25 @@ def send_email(items: list[dict], today: str) -> None:
     to_list = [r for r in RECIPIENTS if r]
     print(f"\n[이메일] 전송 중 → {', '.join(to_list)}")
 
-    cards = ""
+    imgs = ""
     for it in items:
-        cards += f"""
-        <div style="margin-bottom:32px;border:1px solid #dee2e6;
-                    border-radius:10px;overflow:hidden;background:#fff;
-                    box-shadow:0 2px 6px rgba(0,0,0,0.07)">
-          <a href="{it['link']}" target="_blank">
-            <img src="{it['img_url']}"
-                 style="width:100%;display:block;max-height:400px;object-fit:cover">
-          </a>
-          <div style="padding:14px 16px">
-            <a href="{it['link']}" target="_blank"
-               style="font-size:15px;font-weight:600;color:#212529;
-                      text-decoration:none;line-height:1.5">
-              {it['title']}
-            </a>
-          </div>
-        </div>
-        """
+        imgs += f'<img src="{it["img_url"]}" style="width:100%;display:block;margin-bottom:12px;border-radius:6px">\n'
 
     html_body = f"""
     <html>
-    <body style="background:#f1f3f5;margin:0;padding:28px;font-family:'Apple SD Gothic Neo',sans-serif">
-      <div style="max-width:720px;margin:0 auto">
-        <h2 style="color:#1d3557;margin-bottom:24px;font-size:20px">
-          📰 경제 인포그래픽 뉴스 ({today})
+    <body style="background:#f1f3f5;margin:0;padding:24px">
+      <div style="max-width:700px;margin:0 auto">
+        <h2 style="color:#1d3557;margin-bottom:20px;font-family:sans-serif">
+          📰 경제 인포그래픽 ({today})
         </h2>
-        {cards}
-        <p style="color:#adb5bd;font-size:11px;text-align:center;margin-top:24px">
-          출처: 네이버 뉴스 검색 결과
-        </p>
+        {imgs}
       </div>
     </body>
     </html>
     """
 
     msg = MIMEMultipart("alternative")
-    msg["Subject"] = f"📰 경제 인포그래픽 뉴스 ({today})"
+    msg["Subject"] = f"📰 경제 인포그래픽 ({today})"
     msg["From"]    = GMAIL_ADDRESS
     msg["To"]      = ", ".join(to_list)
     msg.attach(MIMEText(html_body, "html", "utf-8"))
