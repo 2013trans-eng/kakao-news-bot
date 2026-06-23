@@ -1,16 +1,13 @@
 import base64
-import html as html_mod
 import io
 import json
 import os
-import re
 import sys
 import smtplib
 import urllib.request
 import urllib.parse
 import urllib.error
-from datetime import datetime, timedelta, timezone
-from email.utils import parsedate_to_datetime
+from datetime import datetime
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 
@@ -25,18 +22,18 @@ IMGBB_API_KEY       = os.environ["IMGBB_API_KEY"]
 GMAIL_ADDRESS       = os.environ.get("GMAIL_ADDRESS", "")
 GMAIL_APP_PASSWORD  = os.environ.get("GMAIL_APP_PASSWORD", "")
 
-TOKEN_URL        = "https://kauth.kakao.com/oauth/token"
-SEND_URL         = "https://kapi.kakao.com/v2/api/talk/memo/default/send"
-NAVER_SEARCH_URL = "https://openapi.naver.com/v1/search/news.json"
+TOKEN_URL         = "https://kauth.kakao.com/oauth/token"
+SEND_URL          = "https://kapi.kakao.com/v2/api/talk/memo/default/send"
+NAVER_IMAGE_URL   = "https://openapi.naver.com/v1/search/image.json"
 
 RECIPIENTS = [GMAIL_ADDRESS, "wondertajo@gmail.com"]
 
 QUERIES = [
-    "경제 인포그래픽",
-    "경제지표 동향",
-    "주간 경제동향",
-    "경제 현황 차트",
-    "경제 통계 그래프",
+    "한국 경제 인포그래픽",
+    "경제지표 그래프 2026",
+    "경제동향 인포그래픽 차트",
+    "한국은행 경제 그래프",
+    "수출 물가 경제 인포그래픽",
 ]
 
 UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -44,74 +41,42 @@ UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
       "Chrome/124.0.0.0 Safari/537.36")
 
 
-# ── 네이버 뉴스 검색 ──────────────────────────────────────────────────────────
+# ── 네이버 이미지 검색 ────────────────────────────────────────────────────────
 
-def is_fresh(pub_date_str: str, hours: int = 48) -> bool:
-    try:
-        pub_dt    = parsedate_to_datetime(pub_date_str)
-        age_hours = (datetime.now(timezone.utc) - pub_dt).total_seconds() / 3600
-        return age_hours <= hours
-    except Exception:
-        return True
-
-
-def search_naver(query: str, n: int = 20) -> list[dict]:
-    params = urllib.parse.urlencode({"query": query, "display": n, "sort": "date"})
-    req    = urllib.request.Request(f"{NAVER_SEARCH_URL}?{params}")
+def search_naver_images(query: str, n: int = 20) -> list[dict]:
+    """네이버 이미지 검색 API로 실제 이미지 URL 반환"""
+    params = urllib.parse.urlencode({
+        "query":   query,
+        "display": n,
+        "sort":    "date",
+        "filter":  "large",   # 큰 이미지만
+    })
+    req = urllib.request.Request(f"{NAVER_IMAGE_URL}?{params}")
     req.add_header("X-Naver-Client-Id",     NAVER_CLIENT_ID)
     req.add_header("X-Naver-Client-Secret", NAVER_CLIENT_SECRET)
     try:
         with urllib.request.urlopen(req, timeout=15) as resp:
             data = json.loads(resp.read().decode())
     except Exception as e:
-        print(f"  Naver 검색 오류 ({query}): {e}")
+        print(f"  이미지 검색 오류 ({query}): {e}")
         return []
     results = []
     for item in data.get("items", []):
-        title   = html_mod.unescape(re.sub(r"<[^>]+>", "", item.get("title", ""))).strip()
-        link    = item.get("link", "").strip()
-        pub_date = item.get("pubDate", "")
-        if title and link and is_fresh(pub_date, hours=48):
-            results.append({"title": title, "link": link, "pubDate": pub_date})
+        img_url = item.get("link", "").strip()
+        w = int(item.get("sizewidth",  0) or 0)
+        h = int(item.get("sizeheight", 0) or 0)
+        # 너무 작은 이미지 제외 (최소 400px 이상)
+        if img_url and img_url.startswith("http") and w >= 400 and h >= 300:
+            results.append({"img_url": img_url, "width": w, "height": h})
     return results
 
 
-# ── 기사 대표 이미지 추출 ─────────────────────────────────────────────────────
-
-def get_og_image(url: str) -> str | None:
-    try:
-        req = urllib.request.Request(url, headers={"User-Agent": UA})
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            raw = resp.read(80000).decode("utf-8", errors="ignore")
-    except Exception as e:
-        print(f"    페이지 오류 ({url[:60]}): {e}")
-        return None
-
-    # og:image 추출
-    patterns = [
-        r'<meta[^>]+property=["\']og:image["\'][^>]+content=["\']([^"\']+)["\']',
-        r'<meta[^>]+content=["\']([^"\']+)["\'][^>]+property=["\']og:image["\']',
-        r'<meta[^>]+name=["\']twitter:image["\'][^>]+content=["\']([^"\']+)["\']',
-    ]
-    for pat in patterns:
-        m = re.search(pat, raw, re.IGNORECASE)
-        if m:
-            img_url = m.group(1).strip()
-            if img_url.startswith("http") and any(
-                ext in img_url.lower() for ext in [".jpg", ".jpeg", ".png", ".gif", ".webp"]
-            ) or "image" in img_url.lower():
-                return img_url
-    return None
-
-
-def is_valid_image(url: str) -> bool:
-    """실제 이미지이고 최소 30KB 이상인지 확인 (작은 아이콘/썸네일 제외)"""
+def is_downloadable(url: str) -> bool:
     try:
         req = urllib.request.Request(url, method="HEAD", headers={"User-Agent": UA})
         with urllib.request.urlopen(req, timeout=8) as resp:
-            ct  = resp.headers.get("Content-Type", "")
-            cl  = int(resp.headers.get("Content-Length", 0))
-            return "image" in ct and cl > 15_000
+            ct = resp.headers.get("Content-Type", "")
+            return "image" in ct
     except Exception:
         return False
 
@@ -119,7 +84,6 @@ def is_valid_image(url: str) -> bool:
 # ── 이미지 수집 ───────────────────────────────────────────────────────────────
 
 def collect_images(target: int = 15) -> list[dict]:
-    seen_links  = set()
     seen_images = set()
     results     = []
 
@@ -127,30 +91,20 @@ def collect_images(target: int = 15) -> list[dict]:
         if len(results) >= target:
             break
         print(f"\n[검색] '{query}'")
-        articles = search_naver(query, n=30)
-        print(f"  기사 {len(articles)}건")
+        images = search_naver_images(query, n=30)
+        print(f"  이미지 {len(images)}건 검색됨")
 
-        for art in articles:
+        for img in images:
             if len(results) >= target:
                 break
-            if art["link"] in seen_links:
+            url = img["img_url"]
+            if url in seen_images:
                 continue
-            seen_links.add(art["link"])
-
-            img_url = get_og_image(art["link"])
-            if not img_url or img_url in seen_images:
+            if not is_downloadable(url):
                 continue
-            if not is_valid_image(img_url):
-                print(f"  ✗ 이미지 무효: {art['title'][:40]}")
-                continue
-
-            seen_images.add(img_url)
-            results.append({
-                "title":   art["title"],
-                "link":    art["link"],
-                "img_url": img_url,
-            })
-            print(f"  ✓ [{len(results)}] {art['title'][:50]}")
+            seen_images.add(url)
+            results.append({"img_url": url})
+            print(f"  ✓ [{len(results)}] {url[:70]}")
 
     return results
 
