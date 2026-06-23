@@ -21,8 +21,14 @@ REFRESH_TOKEN       = os.environ["KAKAO_REFRESH_TOKEN"]
 IMGBB_API_KEY       = os.environ.get("IMGBB_API_KEY", "")
 GMAIL_ADDRESS       = os.environ.get("GMAIL_ADDRESS", "")
 GMAIL_APP_PASSWORD  = os.environ.get("GMAIL_APP_PASSWORD", "")
-GITHUB_REPOSITORY   = os.environ.get("GITHUB_REPOSITORY", "")
-GITHUB_TOKEN        = os.environ.get("GITHUB_TOKEN", "")
+GITHUB_REPOSITORY      = os.environ.get("GITHUB_REPOSITORY", "")
+GITHUB_TOKEN           = os.environ.get("GITHUB_TOKEN", "")
+ONEDRIVE_CLIENT_ID     = os.environ.get("ONEDRIVE_CLIENT_ID", "")
+ONEDRIVE_REFRESH_TOKEN = os.environ.get("ONEDRIVE_REFRESH_TOKEN", "")
+
+ONEDRIVE_FOLDER = "!천지운(2026.06.19업데이트)/카드뉴스"
+GRAPH_TOKEN_URL = "https://login.microsoftonline.com/consumers/oauth2/v2.0/token"
+GRAPH_API       = "https://graph.microsoft.com/v1.0"
 
 TOKEN_URL = "https://kauth.kakao.com/oauth/token"
 SEND_URL  = "https://kapi.kakao.com/v2/api/talk/memo/default/send"
@@ -386,6 +392,67 @@ def send_kakao(access_token: str, img_url: str, today: str) -> None:
         print(f"  [HTTPError {e.code}] {e.read().decode()}")
 
 
+# ── OneDrive 업로드 ───────────────────────────────────────────────────────────
+
+def get_onedrive_access_token() -> str | None:
+    if not ONEDRIVE_CLIENT_ID or not ONEDRIVE_REFRESH_TOKEN:
+        return None
+    try:
+        body = urllib.parse.urlencode({
+            "grant_type":    "refresh_token",
+            "client_id":     ONEDRIVE_CLIENT_ID,
+            "refresh_token": ONEDRIVE_REFRESH_TOKEN,
+            "scope":         "Files.ReadWrite offline_access",
+        }).encode()
+        req = urllib.request.Request(GRAPH_TOKEN_URL, data=body, method="POST")
+        req.add_header("Content-Type", "application/x-www-form-urlencoded")
+        with urllib.request.urlopen(req, timeout=15) as r:
+            result = json.loads(r.read().decode())
+        new_rt = result.get("refresh_token")
+        if new_rt and new_rt != ONEDRIVE_REFRESH_TOKEN:
+            with open(os.environ.get("GITHUB_ENV", "/dev/null"), "a") as f:
+                f.write(f"NEW_ONEDRIVE_REFRESH_TOKEN={new_rt}\n")
+        return result["access_token"]
+    except Exception as e:
+        print(f"  [OneDrive] 토큰 오류: {e}")
+        return None
+
+
+def upload_to_onedrive(sources: dict[str, list[str]], today: str) -> None:
+    access_token = get_onedrive_access_token()
+    if not access_token:
+        print("\n[OneDrive] ONEDRIVE_CLIENT_ID/REFRESH_TOKEN 없음 — 건너뜀")
+        return
+    print(f"\n[OneDrive] 업로드 중... (폴더: {ONEDRIVE_FOLDER}/{today})")
+    headers = {"Authorization": f"Bearer {access_token}"}
+    idx = 0
+    for imgs in sources.values():
+        for url in imgs:
+            try:
+                req  = urllib.request.Request(url, headers={"User-Agent": UA})
+                data = urllib.request.urlopen(req, timeout=15).read()
+                ext  = url.split("?")[0].rsplit(".", 1)[-1].lower()
+                if ext not in ("jpg", "jpeg", "png", "gif", "webp"):
+                    ext = "jpg"
+                idx += 1
+                fname       = f"{idx:03d}.{ext}"
+                upload_path = f"{ONEDRIVE_FOLDER}/{today}/{fname}"
+                graph_url   = (
+                    f"{GRAPH_API}/me/drive/root:/"
+                    f"{urllib.parse.quote(upload_path, safe='/')}:/content"
+                )
+                put_req = urllib.request.Request(
+                    graph_url, data=data, method="PUT",
+                    headers={**headers, "Content-Type": "application/octet-stream"},
+                )
+                with urllib.request.urlopen(put_req, timeout=30) as r:
+                    r.read()
+                print(f"  ✓ {fname}  ({len(data)//1024}KB)")
+            except Exception as e:
+                print(f"  [실패] {url[:50]}: {e}")
+    print(f"  → 총 {idx}개 업로드 완료")
+
+
 # ── 이메일 ───────────────────────────────────────────────────────────────────
 
 def send_email(sources: dict[str, list[str]], today: str) -> None:
@@ -469,6 +536,7 @@ def main():
     if not kakao_img:
         kakao_img = all_imgs[0]
 
+    upload_to_onedrive(sources, today)
     access_token = refresh_access_token()
     send_kakao(access_token, kakao_img, today)
     send_email(sources, today)

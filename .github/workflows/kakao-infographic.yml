@@ -33,20 +33,30 @@ jobs:
           NAVER_CLIENT_ID:     ${{ secrets.NAVER_CLIENT_ID }}
           NAVER_CLIENT_SECRET: ${{ secrets.NAVER_CLIENT_SECRET }}
           IMGBB_API_KEY:       ${{ secrets.IMGBB_API_KEY }}
-          GMAIL_ADDRESS:       ${{ secrets.GMAIL_ADDRESS }}
-          GMAIL_APP_PASSWORD:  ${{ secrets.GMAIL_APP_PASSWORD }}
-          GITHUB_TOKEN:        ${{ secrets.GITHUB_TOKEN }}
+          GMAIL_ADDRESS:           ${{ secrets.GMAIL_ADDRESS }}
+          GMAIL_APP_PASSWORD:      ${{ secrets.GMAIL_APP_PASSWORD }}
+          GITHUB_TOKEN:            ${{ secrets.GITHUB_TOKEN }}
+          ONEDRIVE_CLIENT_ID:      ${{ secrets.ONEDRIVE_CLIENT_ID }}
+          ONEDRIVE_REFRESH_TOKEN:  ${{ secrets.ONEDRIVE_REFRESH_TOKEN }}
 
-      - name: Refresh Token 자동 갱신 (필요 시)
+      - name: Kakao Refresh Token 자동 갱신 (필요 시)
         if: ${{ env.NEW_REFRESH_TOKEN != '' }}
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           NEW_REFRESH_TOKEN: ${{ env.NEW_REFRESH_TOKEN }}
         run: |
-          if [ -z "$GH_TOKEN" ]; then
-            echo "GH_PAT Secret 없음 — 건너뜀"
-            exit 0
-          fi
+          if [ -z "$GH_TOKEN" ]; then echo "GH_PAT 없음 — 건너뜀"; exit 0; fi
           echo "$NEW_REFRESH_TOKEN" | gh secret set KAKAO_REFRESH_TOKEN \
             --repo ${{ github.repository }}
-          echo "[+] KAKAO_REFRESH_TOKEN Secret 갱신 완료"
+          echo "[+] KAKAO_REFRESH_TOKEN 갱신 완료"
+
+      - name: OneDrive Refresh Token 자동 갱신 (필요 시)
+        if: ${{ env.NEW_ONEDRIVE_REFRESH_TOKEN != '' }}
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          NEW_ONEDRIVE_REFRESH_TOKEN: ${{ env.NEW_ONEDRIVE_REFRESH_TOKEN }}
+        run: |
+          if [ -z "$GH_TOKEN" ]; then echo "GH_PAT 없음 — 건너뜀"; exit 0; fi
+          echo "$NEW_ONEDRIVE_REFRESH_TOKEN" | gh secret set ONEDRIVE_REFRESH_TOKEN \
+            --repo ${{ github.repository }}
+          echo "[+] ONEDRIVE_REFRESH_TOKEN 갱신 완료"
