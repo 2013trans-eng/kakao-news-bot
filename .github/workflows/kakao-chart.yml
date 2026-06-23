@@ -1,0 +1,55 @@
+name: 경제 인포그래픽 카카오톡·이메일 전송
+
+on:
+  workflow_dispatch:        # 수동 실행 / cron-job.org 트리거
+
+jobs:
+  send-chart:
+    runs-on: ubuntu-latest
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+    permissions:
+      contents: read
+      actions: write
+
+    steps:
+      - name: 코드 체크아웃
+        uses: actions/checkout@v4.2.2
+
+      - name: Python 3.11 설정
+        uses: actions/setup-python@v5.6.0
+        with:
+          python-version: '3.11'
+
+      - name: 한글 폰트 설치
+        run: |
+          sudo apt-get install -y fonts-nanum
+          fc-cache -fv
+
+      - name: 패키지 설치
+        run: pip install matplotlib yfinance requests Pillow
+
+      - name: 경제 인포그래픽 생성 및 전송
+        id: send
+        run: python kakao_chart.py
+        env:
+          KAKAO_REST_API_KEY:  ${{ secrets.KAKAO_REST_API_KEY }}
+          KAKAO_REFRESH_TOKEN: ${{ secrets.KAKAO_REFRESH_TOKEN }}
+          ECOS_API_KEY:        ${{ secrets.ECOS_API_KEY }}
+          IMGBB_API_KEY:       ${{ secrets.IMGBB_API_KEY }}
+          GMAIL_ADDRESS:       ${{ secrets.GMAIL_ADDRESS }}
+          GMAIL_APP_PASSWORD:  ${{ secrets.GMAIL_APP_PASSWORD }}
+
+      - name: Refresh Token 자동 갱신 (필요 시)
+        if: ${{ env.NEW_REFRESH_TOKEN != '' }}
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          NEW_REFRESH_TOKEN: ${{ env.NEW_REFRESH_TOKEN }}
+        run: |
+          if [ -z "$GH_TOKEN" ]; then
+            echo "GH_PAT Secret 없음 — 자동 갱신 건너뜀"
+            exit 0
+          fi
+          echo "$NEW_REFRESH_TOKEN" | gh secret set KAKAO_REFRESH_TOKEN \
+            --repo ${{ github.repository }}
+          echo "[+] KAKAO_REFRESH_TOKEN Secret 갱신 완료"
