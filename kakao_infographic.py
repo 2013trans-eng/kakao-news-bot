@@ -28,10 +28,10 @@ NAVER_NEWS_URL = "https://openapi.naver.com/v1/search/news.json"
 RECIPIENTS = [GMAIL_ADDRESS, "wondertajo@gmail.com"]
 
 QUERIES = [
-    "경제 인포그래픽",
-    "코스피 환율 금리 그래프",
-    "경제지표 현황 차트",
-    "한국 경제 동향 그래프",
+    "코스피 환율 금리 주간 그래프",
+    "경제지표 통계 차트",
+    "수출입 GDP 성장률 그래프",
+    "물가 인플레이션 통계 차트",
 ]
 
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
@@ -109,7 +109,8 @@ def collect_images(target: int = 10) -> list[str]:
 
 # ── imgbb 업로드 ──────────────────────────────────────────────────────────────
 
-def upload_imgbb(img_url: str) -> str | None:
+def upload_imgbb(img_url: str) -> tuple[str, str] | None:
+    """(direct_url, viewer_page_url) 반환"""
     if not IMGBB_API_KEY:
         print("[imgbb] API 키 없음")
         return None
@@ -122,9 +123,10 @@ def upload_imgbb(img_url: str) -> str | None:
         req     = urllib.request.Request("https://api.imgbb.com/1/upload", data=payload, method="POST")
         with urllib.request.urlopen(req, timeout=30) as r:
             result = json.loads(r.read().decode())
-        url = result["data"]["url"]
-        print(f"[imgbb] 업로드 완료: {url}")
-        return url
+        direct  = result["data"]["url"]
+        viewer  = result["data"].get("url_viewer", direct)
+        print(f"[imgbb] 업로드 완료: {direct}")
+        return direct, viewer
     except Exception as e:
         print(f"[imgbb] 실패: {e}")
         return None
@@ -154,16 +156,22 @@ def refresh_access_token() -> str:
     return result["access_token"]
 
 
-def send_kakao(access_token: str, image_url: str, today: str) -> None:
+def send_kakao(access_token: str, image_url: str, viewer_url: str, today: str) -> None:
     print(f"\n[카카오] 전송 중...")
     template = {
         "object_type": "feed",
         "content": {
             "title":       f"경제 인포그래픽 ({today})",
-            "description": "탭하면 큰 이미지로 볼 수 있어요 — 전체 이미지는 메일 확인",
+            "description": "오늘의 경제 차트 · 그래프 모음",
             "image_url":   image_url,
-            "link":        {"web_url": image_url},
+            "link":        {"web_url": viewer_url},
         },
+        "buttons": [
+            {
+                "title": "이미지 크게 보기",
+                "link":  {"web_url": viewer_url},
+            }
+        ],
     }
     payload = urllib.parse.urlencode(
         {"template_object": json.dumps(template, ensure_ascii=False)}
@@ -231,13 +239,15 @@ def main():
         sys.exit(1)
 
     print(f"\n[imgbb] 카카오톡용 업로드 중...")
-    kakao_img = upload_imgbb(images[0])
-    if not kakao_img:
-        kakao_img = images[0]
+    imgbb = upload_imgbb(images[0])
+    if imgbb:
+        kakao_img, kakao_viewer = imgbb
+    else:
+        kakao_img = kakao_viewer = images[0]
         print(f"  원본 URL 직접 사용")
 
     access_token = refresh_access_token()
-    send_kakao(access_token, kakao_img, today)
+    send_kakao(access_token, kakao_img, kakao_viewer, today)
     send_email(images, today)
 
     print(f"\n{'='*50}\n[+] 완료!\n{'='*50}")
