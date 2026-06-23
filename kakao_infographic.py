@@ -52,7 +52,7 @@ def search_images(query: str, n: int = 20) -> list[str]:
         thumb = item.get("thumbnail", "").strip()
         w = int(item.get("sizewidth",  0) or 0)
         h = int(item.get("sizeheight", 0) or 0)
-        if thumb and thumb.startswith("https://ssl.pstatic.net") and w >= 400 and h >= 300:
+        if thumb and thumb.startswith("http") and w >= 300 and h >= 200:
             urls.append(thumb)
     return urls
 
