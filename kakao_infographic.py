@@ -141,8 +141,8 @@ def make_infographic(data: list[dict], today: str) -> str:
                 fontsize=10, color="#6c757d")
 
         # 구분선
-        ax.axhline(y=0.68, xmin=0.08, xmax=0.92, color=BORDER, linewidth=0.8,
-                   transform=ax.transAxes)
+        ax.plot([0.08, 0.92], [0.68, 0.68], color=BORDER, linewidth=0.8,
+                transform=ax.transAxes, clip_on=False)
 
         # 현재 값
         val_str = fmt_value(item["value"], item["unit"])
@@ -285,4 +285,10 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    import traceback
+    try:
+        main()
+    except Exception as e:
+        print(f"\n[FATAL ERROR] {e}")
+        traceback.print_exc()
+        sys.exit(1)
