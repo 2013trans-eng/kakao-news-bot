@@ -204,17 +204,31 @@ def scrape_source(name: str, url: str, date_patterns: list[str]) -> list[str]:
     return filtered
 
 
+def dedup_key(url: str) -> str:
+    """파일명에서 크기 접미사를 제거해 중복 감지 키 반환.
+    예) YH20260623001800_P2.jpg → yh20260623001800"""
+    fname = url.split("/")[-1].split("?")[0]
+    fname = re.sub(r'[_-][A-Za-z]?\d*\.(jpg|jpeg|png|gif|webp)$', '', fname, flags=re.IGNORECASE)
+    fname = re.sub(r'\.(jpg|jpeg|png|gif|webp)$', '', fname, flags=re.IGNORECASE)
+    return fname.lower()
+
+
 def collect_all() -> dict[str, list[str]]:
     print("\n[인포그래픽 수집 시작]")
     date_pats = today_patterns()
     print(f"  날짜 필터: {date_pats[0]} ({', '.join(date_pats[1:])})")
     result: dict[str, list[str]] = {}
-    seen_global: set[str] = set()
+    seen_keys: set[str] = set()
     for name, url in SOURCES:
         imgs = scrape_source(name, url, date_pats)
-        # 전체 소스 통합 중복 제거
-        unique = [u for u in imgs if u not in seen_global]
-        seen_global.update(unique)
+        unique = []
+        for u in imgs:
+            k = dedup_key(u)
+            if k not in seen_keys:
+                seen_keys.add(k)
+                unique.append(u)
+            else:
+                print(f"      [중복 제거] {u[:70]}")
         if unique:
             result[name] = unique
         time.sleep(0.8)
