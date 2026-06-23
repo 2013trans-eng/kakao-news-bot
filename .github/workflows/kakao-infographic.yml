@@ -21,6 +21,9 @@ jobs:
         with:
           python-version: '3.11'
 
+      - name: 패키지 설치
+        run: pip install Pillow requests
+
       - name: 경제 인포그래픽 수집 및 전송
         id: send
         run: python kakao_infographic.py
@@ -29,6 +32,7 @@ jobs:
           KAKAO_REFRESH_TOKEN: ${{ secrets.KAKAO_REFRESH_TOKEN }}
           NAVER_CLIENT_ID:     ${{ secrets.NAVER_CLIENT_ID }}
           NAVER_CLIENT_SECRET: ${{ secrets.NAVER_CLIENT_SECRET }}
+          IMGBB_API_KEY:       ${{ secrets.IMGBB_API_KEY }}
           GMAIL_ADDRESS:       ${{ secrets.GMAIL_ADDRESS }}
           GMAIL_APP_PASSWORD:  ${{ secrets.GMAIL_APP_PASSWORD }}
 

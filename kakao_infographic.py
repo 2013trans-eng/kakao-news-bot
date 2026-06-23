@@ -1,4 +1,6 @@
+import base64
 import html as html_mod
+import io
 import json
 import os
 import re
@@ -12,10 +14,14 @@ from email.utils import parsedate_to_datetime
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 
+import requests
+from PIL import Image
+
 REST_API_KEY        = os.environ["KAKAO_REST_API_KEY"]
 REFRESH_TOKEN       = os.environ["KAKAO_REFRESH_TOKEN"]
 NAVER_CLIENT_ID     = os.environ["NAVER_CLIENT_ID"]
 NAVER_CLIENT_SECRET = os.environ["NAVER_CLIENT_SECRET"]
+IMGBB_API_KEY       = os.environ["IMGBB_API_KEY"]
 GMAIL_ADDRESS       = os.environ.get("GMAIL_ADDRESS", "")
 GMAIL_APP_PASSWORD  = os.environ.get("GMAIL_APP_PASSWORD", "")
 
@@ -148,6 +154,62 @@ def collect_images(target: int = 15) -> list[dict]:
     return results
 
 
+# ── 콜라주 생성 + imgbb 업로드 ────────────────────────────────────────────────
+
+def download_image(url: str) -> Image.Image | None:
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": UA})
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            return Image.open(io.BytesIO(resp.read())).convert("RGB")
+    except Exception as e:
+        print(f"    이미지 다운로드 실패: {e}")
+        return None
+
+
+def make_collage(items: list[dict], cols: int = 3) -> bytes:
+    """이미지를 격자 형태로 합쳐 PNG bytes 반환"""
+    print("\n[콜라주] 이미지 다운로드 중...")
+    cell_w, cell_h = 600, 400
+    images = []
+    for it in items:
+        img = download_image(it["img_url"])
+        if img:
+            img = img.resize((cell_w, cell_h), Image.LANCZOS)
+            images.append(img)
+            print(f"  ✓ ({len(images)}) {it['title'][:45]}")
+        if len(images) >= 12:
+            break
+
+    if not images:
+        raise RuntimeError("다운로드된 이미지 없음")
+
+    rows   = (len(images) + cols - 1) // cols
+    canvas = Image.new("RGB", (cols * cell_w, rows * cell_h), (245, 245, 245))
+    for i, img in enumerate(images):
+        x = (i % cols) * cell_w
+        y = (i // cols) * cell_h
+        canvas.paste(img, (x, y))
+
+    buf = io.BytesIO()
+    canvas.save(buf, format="JPEG", quality=88)
+    buf.seek(0)
+    print(f"  콜라주 완료: {rows}×{cols} ({len(images)}장)")
+    return buf.read()
+
+
+def upload_imgbb(image_bytes: bytes) -> str:
+    print("\n[imgbb] 업로드 중...")
+    resp = requests.post(
+        "https://api.imgbb.com/1/upload",
+        data={"key": IMGBB_API_KEY, "image": base64.b64encode(image_bytes).decode()},
+        timeout=60,
+    )
+    resp.raise_for_status()
+    url = resp.json()["data"]["url"]
+    print(f"  완료: {url}")
+    return url
+
+
 # ── 카카오 ────────────────────────────────────────────────────────────────────
 
 def refresh_access_token() -> str:
@@ -172,61 +234,22 @@ def refresh_access_token() -> str:
     return result["access_token"]
 
 
-def send_kakao_list(access_token: str, items: list[dict], today: str) -> None:
-    """list 템플릿으로 최대 5개 이미지+링크 전송"""
-    print("\n[카카오] list 템플릿 전송 중...")
-
-    contents = []
-    for it in items[:5]:
-        contents.append({
-            "title":       it["title"][:50],
-            "description": "",
-            "image_url":   it["img_url"],
-            "link": {"web_url": it["link"]},
-        })
-
-    template = {
-        "object_type": "list",
-        "header_title": f"📰 경제 인포그래픽 ({today})",
-        "header_link":  {"web_url": "https://news.naver.com"},
-        "contents":     contents,
-        "buttons": [{
-            "title": "더보기",
-            "link":  {"web_url": "https://news.naver.com/section/economy"},
-        }],
-    }
-    payload = urllib.parse.urlencode(
-        {"template_object": json.dumps(template, ensure_ascii=False)}
-    ).encode("utf-8")
-    req = urllib.request.Request(SEND_URL, data=payload, method="POST")
-    req.add_header("Authorization", f"Bearer {access_token}")
-    req.add_header("Content-Type",  "application/x-www-form-urlencoded")
-    try:
-        with urllib.request.urlopen(req) as resp:
-            result = json.loads(resp.read().decode())
-            print(f"  [HTTP {resp.status}] result_code={result.get('result_code')}")
-    except urllib.error.HTTPError as e:
-        body_err = e.read().decode()
-        print(f"  [HTTPError {e.code}] {body_err}")
-        # list 템플릿 실패 시 feed 템플릿으로 재시도
-        _send_kakao_feed_fallback(access_token, items[0], today)
-
-
-def _send_kakao_feed_fallback(access_token: str, item: dict, today: str) -> None:
-    print("  → feed 템플릿으로 재시도...")
+def send_kakao_collage(access_token: str, collage_url: str, today: str) -> None:
+    """콜라주 이미지를 feed 템플릿으로 전송"""
+    print("\n[카카오] 콜라주 이미지 전송 중...")
     template = {
         "object_type": "feed",
         "content": {
-            "title":       f"📰 경제 인포그래픽 ({today})",
-            "description": item["title"][:80],
-            "image_url":   item["img_url"],
-            "image_width": 800,
-            "image_height": 600,
-            "link": {"web_url": item["link"]},
+            "title":        f"📰 경제 인포그래픽 ({today})",
+            "description":  "오늘의 경제 뉴스 이미지 모음",
+            "image_url":    collage_url,
+            "image_width":  1800,
+            "image_height": 1200,
+            "link": {"web_url": "https://news.naver.com/section/economy"},
         },
         "buttons": [{
-            "title": "기사 보기",
-            "link":  {"web_url": item["link"]},
+            "title": "경제 뉴스 더보기",
+            "link":  {"web_url": "https://news.naver.com/section/economy"},
         }],
     }
     payload = urllib.parse.urlencode(
@@ -317,8 +340,12 @@ def main():
         print("[!] 수집된 이미지 없음 — 종료")
         sys.exit(1)
 
+    # 콜라주 생성 → imgbb 업로드 → 카카오톡 전송
+    collage_bytes = make_collage(items)
+    collage_url   = upload_imgbb(collage_bytes)
+
     access_token = refresh_access_token()
-    send_kakao_list(access_token, items, today)
+    send_kakao_collage(access_token, collage_url, today)
     send_email(items, today)
 
     print(f"\n{'='*50}\n[+] 완료!\n{'='*50}")
