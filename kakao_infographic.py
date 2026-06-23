@@ -32,15 +32,12 @@ NAVER_SEARCH_URL = "https://openapi.naver.com/v1/search/news.json"
 RECIPIENTS = [GMAIL_ADDRESS, "wondertajo@gmail.com"]
 
 QUERIES = [
-    "경제 인포그래픽 그래프",
-    "경제지표 차트 통계",
-    "주요 경제지표 그래프",
-    "경제 통계 인포그래픽",
-    "경제동향 차트 분석",
+    "경제 인포그래픽",
+    "경제지표 동향",
+    "주간 경제동향",
+    "경제 현황 차트",
+    "경제 통계 그래프",
 ]
-
-# 인포그래픽 아닌 일반 기사 사진 필터
-NOISE_TITLE_KW = ["기자", "대통령", "장관", "회의", "현장", "방문", "사진"]
 
 UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
       "AppleWebKit/537.36 (KHTML, like Gecko) "
@@ -114,7 +111,7 @@ def is_valid_image(url: str) -> bool:
         with urllib.request.urlopen(req, timeout=8) as resp:
             ct  = resp.headers.get("Content-Type", "")
             cl  = int(resp.headers.get("Content-Length", 0))
-            return "image" in ct and cl > 30_000
+            return "image" in ct and cl > 15_000
     except Exception:
         return False
 
@@ -139,11 +136,6 @@ def collect_images(target: int = 15) -> list[dict]:
             if art["link"] in seen_links:
                 continue
             seen_links.add(art["link"])
-
-            # 일반 기사 사진 제목 필터
-            if any(kw in art["title"] for kw in NOISE_TITLE_KW):
-                print(f"  ✗ 노이즈 제목: {art['title'][:40]}")
-                continue
 
             img_url = get_og_image(art["link"])
             if not img_url or img_url in seen_images:
