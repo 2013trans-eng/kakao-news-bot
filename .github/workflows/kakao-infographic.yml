@@ -2,6 +2,8 @@ name: 경제 인포그래픽 뉴스 전송
 
 on:
   workflow_dispatch:
+  schedule:
+    - cron: '0 9 * * *'   # 매일 오후 6시 KST (= 09:00 UTC)
 
 jobs:
   send-infographic:
