@@ -526,13 +526,13 @@ def main():
         except Exception:
             pass
 
-    # 이미지 호스팅: GitHub raw 우선, 실패 시 imgbb, 실패 시 원본 URL
+    # 이미지 호스팅: imgbb 우선 (카카오 미리보기 호환성 best), 실패 시 GitHub raw
     kakao_img = None
     if collage_bytes:
-        kakao_img = push_collage_to_github(collage_bytes)
-    if not kakao_img and collage_bytes:
         imgbb = upload_imgbb(collage_bytes)
         kakao_img = imgbb[0] if imgbb else None
+    if not kakao_img and collage_bytes:
+        kakao_img = push_collage_to_github(collage_bytes)
     if not kakao_img:
         kakao_img = all_imgs[0]
 
