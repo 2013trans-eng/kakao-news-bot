@@ -25,7 +25,13 @@ GITHUB_REPOSITORY      = os.environ.get("GITHUB_REPOSITORY", "")
 GITHUB_TOKEN           = os.environ.get("GITHUB_TOKEN", "")
 ONEDRIVE_CLIENT_ID     = os.environ.get("ONEDRIVE_CLIENT_ID", "")
 ONEDRIVE_REFRESH_TOKEN = os.environ.get("ONEDRIVE_REFRESH_TOKEN", "")
-
+GOOGLE_CLIENT_ID     = os.environ.get("GOOGLE_CLIENT_ID", "")
+GOOGLE_CLIENT_SECRET = os.environ.get("GOOGLE_CLIENT_SECRET", "")
+GOOGLE_REFRESH_TOKEN = os.environ.get("GOOGLE_REFRESH_TOKEN", "")
+GDRIVE_FOLDER_NAME   = "카드뉴스"
+GOOGLE_TOKEN_URL     = "https://oauth2.googleapis.com/token"
+GDRIVE_API           = "https://www.googleapis.com/drive/v3"
+GDRIVE_UPLOAD_API    = "https://www.googleapis.com/upload/drive/v3"
 ONEDRIVE_FOLDER = "!천지운(2026.06.19업데이트)/카드뉴스"
 GRAPH_TOKEN_URL = "https://login.microsoftonline.com/consumers/oauth2/v2.0/token"
 GRAPH_API       = "https://graph.microsoft.com/v1.0"
