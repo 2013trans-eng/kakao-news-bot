@@ -458,6 +458,108 @@ def upload_to_onedrive(sources: dict[str, list[str]], today: str) -> None:
                 print(f"  [실패] {url[:50]}: {e}")
     print(f"  → 총 {idx}개 업로드 완료")
 
+# ── Google Drive 업로드 ───────────────────────────────────────────────────────
+
+def get_google_access_token() -> str | None:
+    if not all([GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, GOOGLE_REFRESH_TOKEN]):
+        return None
+    try:
+        body = urllib.parse.urlencode({
+            "grant_type":    "refresh_token",
+            "client_id":     GOOGLE_CLIENT_ID,
+            "client_secret": GOOGLE_CLIENT_SECRET,
+            "refresh_token": GOOGLE_REFRESH_TOKEN,
+        }).encode()
+        req = urllib.request.Request(GOOGLE_TOKEN_URL, data=body, method="POST",
+                                     headers={"Content-Type": "application/x-www-form-urlencoded"})
+        with urllib.request.urlopen(req, timeout=15) as r:
+            return json.loads(r.read())["access_token"]
+    except Exception as e:
+        print(f"  [Google] 토큰 오류: {e}")
+        return None
+
+
+def gdrive_find_or_create_folder(token: str, name: str, parent_id: str = None) -> str | None:
+    headers = {"Authorization": f"Bearer {token}"}
+    q = f"name='{name}' and mimeType='application/vnd.google-apps.folder' and trashed=false"
+    if parent_id:
+        q += f" and '{parent_id}' in parents"
+    try:
+        url = f"{GDRIVE_API}/files?" + urllib.parse.urlencode({"q": q, "fields": "files(id)"})
+        req = urllib.request.Request(url, headers=headers)
+        with urllib.request.urlopen(req, timeout=15) as r:
+            files = json.loads(r.read()).get("files", [])
+        if files:
+            return files[0]["id"]
+        metadata: dict = {"name": name, "mimeType": "application/vnd.google-apps.folder"}
+        if parent_id:
+            metadata["parents"] = [parent_id]
+        req = urllib.request.Request(f"{GDRIVE_API}/files",
+                                     data=json.dumps(metadata).encode(), method="POST",
+                                     headers={**headers, "Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=15) as r:
+            return json.loads(r.read())["id"]
+    except Exception as e:
+        print(f"  [Google Drive] 폴더 오류: {e}")
+        return None
+
+
+def gdrive_upload_file(token: str, folder_id: str, filename: str,
+                       data: bytes, mime: str = "image/jpeg") -> bool:
+    boundary = "gdrive_boundary_x7k"
+    metadata = json.dumps({"name": filename, "parents": [folder_id]}).encode()
+    body = (
+        f"--{boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n".encode()
+        + metadata
+        + f"\r\n--{boundary}\r\nContent-Type: {mime}\r\n\r\n".encode()
+        + data
+        + f"\r\n--{boundary}--".encode()
+    )
+    req = urllib.request.Request(
+        f"{GDRIVE_UPLOAD_API}/files?uploadType=multipart", data=body, method="POST",
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Content-Type": f"multipart/related; boundary={boundary}",
+        },
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=30) as r:
+            fid = json.loads(r.read()).get("id", "?")
+            print(f"    ✓ {filename}  (id={fid[:8]}...)")
+            return True
+    except Exception as e:
+        print(f"    [실패] {filename}: {e}")
+        return False
+
+
+def upload_to_gdrive(sources: dict[str, list[str]], today: str) -> None:
+    token = get_google_access_token()
+    if not token:
+        print("\n[Google Drive] 환경변수 없음 — 건너뜀")
+        return
+    print(f"\n[Google Drive] 업로드 중... ({GDRIVE_FOLDER_NAME}/{today})")
+    parent_id = gdrive_find_or_create_folder(token, GDRIVE_FOLDER_NAME)
+    if not parent_id:
+        print("  [Google Drive] 루트 폴더 생성 실패"); return
+    date_id = gdrive_find_or_create_folder(token, today, parent_id)
+    if not date_id:
+        print("  [Google Drive] 날짜 폴더 생성 실패"); return
+    idx = 0
+    for imgs in sources.values():
+        for url in imgs:
+            try:
+                req  = urllib.request.Request(url, headers={"User-Agent": UA})
+                data = urllib.request.urlopen(req, timeout=15).read()
+                ext  = url.split("?")[0].rsplit(".", 1)[-1].lower()
+                if ext not in ("jpg", "jpeg", "png", "gif", "webp"):
+                    ext = "jpg"
+                idx += 1
+                mime = "image/jpeg" if ext in ("jpg", "jpeg") else f"image/{ext}"
+                gdrive_upload_file(token, date_id, f"{idx:03d}.{ext}", data, mime)
+            except Exception as e:
+                print(f"  [실패] {url[:50]}: {e}")
+    print(f"  → 총 {idx}개 업로드 완료")
+
 
 # ── 이메일 ───────────────────────────────────────────────────────────────────
 
@@ -543,6 +645,7 @@ def main():
         kakao_img = all_imgs[0]
 
     upload_to_onedrive(sources, today)
+    upload_to_gdrive(sources, today)
     access_token = refresh_access_token()
     send_kakao(access_token, kakao_img, today)
     send_email(sources, today)
