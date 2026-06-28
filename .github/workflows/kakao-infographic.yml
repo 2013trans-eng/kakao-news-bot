@@ -40,7 +40,7 @@ jobs:
           GITHUB_TOKEN:            ${{ secrets.GITHUB_TOKEN }}
           ONEDRIVE_CLIENT_ID:      ${{ secrets.ONEDRIVE_CLIENT_ID }}
           ONEDRIVE_REFRESH_TOKEN:  ${{ secrets.ONEDRIVE_REFRESH_TOKEN }}
-                    GOOGLE_CLIENT_ID:        ${{ secrets.GOOGLE_CLIENT_ID }}
+          GOOGLE_CLIENT_ID:        ${{ secrets.GOOGLE_CLIENT_ID }}
           GOOGLE_CLIENT_SECRET:    ${{ secrets.GOOGLE_CLIENT_SECRET }}
           GOOGLE_REFRESH_TOKEN:    ${{ secrets.GOOGLE_REFRESH_TOKEN }}
 
