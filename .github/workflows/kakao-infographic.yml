@@ -3,7 +3,7 @@ name: 경제 인포그래픽 뉴스 전송
 on:
   workflow_dispatch:
   schedule:
-    - cron: '0 9 * * *'   # 매일 오후 6시 KST (= 09:00 UTC)
+    - cron: '0 3 * * *'   # 오후 6시 KST 목표 (GitHub 지연 감안 = 03:00 UTC)
 
 jobs:
   send-infographic:
