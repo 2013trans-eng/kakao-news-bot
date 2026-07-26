@@ -10,7 +10,7 @@ import time
 import urllib.request
 import urllib.parse
 import urllib.error
-from datetime import datetime
+from datetime import datetime, timedelta
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 
@@ -155,13 +155,17 @@ def check_file_size(url: str) -> int:
 
 
 def today_patterns() -> list[str]:
-    now = datetime.now()
-    return [
-        now.strftime("%Y%m%d"),    # 20260623
-        now.strftime("%Y/%m/%d"),  # 2026/06/23
-        now.strftime("%Y-%m-%d"),  # 2026-06-23
-        now.strftime("%Y.%m.%d"),  # 2026.06.23
-    ]
+    """오늘 + 어제 날짜 패턴 반환 (주말/공휴일 다음날 대비)"""
+    patterns = []
+    for delta in (0, 1):
+        d = datetime.now() - timedelta(days=delta)
+        patterns += [
+            d.strftime("%Y%m%d"),
+            d.strftime("%Y/%m/%d"),
+            d.strftime("%Y-%m-%d"),
+            d.strftime("%Y.%m.%d"),
+        ]
+    return patterns
 
 
 def filter_by_today(images: list[str], html: str, patterns: list[str]) -> list[str]:
@@ -617,7 +621,23 @@ def main():
     sources = collect_all()
 
     if not sources:
-        print("[!] 오늘 날짜 인포그래픽 없음 — 종료 (새 자료가 아직 없을 수 있음)")
+        print("[!] 오늘/어제 날짜 인포그래픽 없음 — 이메일 알림 후 종료")
+        if GMAIL_ADDRESS and GMAIL_APP_PASSWORD:
+            try:
+                today_str = datetime.now().strftime("%Y.%m.%d")
+                msg = MIMEMultipart("alternative")
+                msg["Subject"] = f"[경제 인포그래픽] {today_str} 수집된 이미지 없음"
+                msg["From"]    = GMAIL_ADDRESS
+                msg["To"]      = GMAIL_ADDRESS
+                body = f"<p>{today_str} 기준 인포그래픽 이미지를 찾지 못했습니다.<br>수집 대상 사이트에 새 자료가 없거나 구조가 변경되었을 수 있습니다.</p>"
+                msg.attach(MIMEText(body, "html", "utf-8"))
+                with smtplib.SMTP("smtp.gmail.com", 587) as smtp:
+                    smtp.starttls()
+                    smtp.login(GMAIL_ADDRESS, GMAIL_APP_PASSWORD)
+                    smtp.sendmail(GMAIL_ADDRESS, [GMAIL_ADDRESS], msg.as_bytes())
+                print("  알림 이메일 전송 완료")
+            except Exception as e:
+                print(f"  알림 이메일 실패: {e}")
         sys.exit(0)
 
     # 카카오톡용: 전체 이미지 상위 6장으로 콜라주 생성
