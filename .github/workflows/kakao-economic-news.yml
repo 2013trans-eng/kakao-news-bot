@@ -33,7 +33,7 @@ jobs:
           GMAIL_APP_PASSWORD:  ${{ secrets.GMAIL_APP_PASSWORD }}
 
       - name: Refresh Token 자동 갱신 (필요 시)
-        if: ${{ env.NEW_REFRESH_TOKEN != '' }}
+        if: ${{ always() && env.NEW_REFRESH_TOKEN != '' }}
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           NEW_REFRESH_TOKEN: ${{ env.NEW_REFRESH_TOKEN }}
