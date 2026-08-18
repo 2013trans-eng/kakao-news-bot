@@ -252,9 +252,6 @@ def main():
     print(f"{'='*50}")
     print(f"실행 시각: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} UTC")
     print(f"{'='*50}")
-    print("[대기] 경제뉴스 봇 먼저 실행 대기 (300초)...")
-    time.sleep(300)
-    print("[대기] 완료, 이제 실행합니다.")
     # 1. 카카오 토큰 갱신
     access_token, new_rt = refresh_access_token()
     if new_rt:
